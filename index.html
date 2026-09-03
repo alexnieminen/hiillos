@@ -185,9 +185,21 @@ h1{margin:6px 0 2px}
    ============================================================ */
 input,select,textarea{color:var(--label); background:transparent; border:none; outline:none;
   font-variant-numeric:tabular-nums; font-size:17px; letter-spacing:-.011em}
-input[type=number],input[type=text],input[type=date]{
+input[type=number],input[type=text],input[type=date],input[type=password]{
   background:var(--fill); border-radius:9px; padding:8px 11px; width:100%; min-width:0}
 input[type=number]{text-align:right; max-width:112px}
+
+/* A long text value cannot share a flex row with its own label. These inputs
+   are width:100%, so in a .row they claimed everything, collapsed the label
+   column to ZERO, and the field ended up painted straight over the wrapped
+   label text — which is what the GitHub rows looked like. Two defences:
+   long fields opt into a stacked layout, and any text field left in a flex
+   row is capped so it can never do that again. */
+.row.stack{display:block}
+.row.stack .grow{min-width:0; margin-bottom:7px}
+.row.stack input{width:100%; max-width:none; text-align:left}
+.row:not(.stack) input[type=text],
+.row:not(.stack) input[type=password]{flex:0 1 auto; max-width:56%}
 textarea{background:var(--fill); border-radius:var(--r-ctl); padding:11px 13px; width:100%;
   resize:vertical; min-height:88px; line-height:1.45; font-size:17px}
 .btn{display:inline-flex; align-items:center; justify-content:center; gap:6px;
@@ -284,6 +296,14 @@ textarea{background:var(--fill); border-radius:var(--r-ctl); padding:11px 13px; 
 .pill.o{background:color-mix(in srgb,var(--orange) 18%,transparent); color:var(--orange)}
 .pill.r{background:color-mix(in srgb,var(--red) 16%,transparent); color:var(--red)}
 .note{font-size:13px; color:var(--label2); line-height:1.45; padding:11px 16px}
+/* Numbered steps you follow while holding the phone in the other hand. The
+   marker sits in the gutter so the wrapped lines of a step stay aligned with
+   its first line rather than with the number. */
+.steps{margin:0; padding:0 0 0 20px; list-style:decimal}
+.steps li{margin:0 0 6px; line-height:1.45; padding-left:2px}
+.steps li:last-child{margin-bottom:0}
+.steps li::marker{color:var(--label3); font-variant-numeric:tabular-nums}
+.steps b{color:var(--label)}
 .warn{background:color-mix(in srgb,var(--orange) 12%,transparent); border-radius:var(--r-ctl);
   padding:11px 14px; font-size:13.5px; line-height:1.45; margin-bottom:12px}
 .empty{padding:26px 16px; text-align:center; color:var(--label3); font-size:14.5px; line-height:1.5}
@@ -3533,20 +3553,20 @@ var GH = {
 function ghSection(){
   var ok = GH.ready(), tok = GH.token();
   var h = '<h2 class="t-section" style="margin:26px 0 8px 4px">GitHub sync</h2><div class="card">'+
-    '<label class="row"><div class="grow"><div class="ttl t-body">Repo</div>'+
+    '<label class="row stack"><div class="grow"><div class="ttl t-body">Repo</div>'+
       '<div class="sub2 t-foot">owner/name \u00b7 make it private</div></div>'+
       '<input type="text" value="'+esc(S.profile.ghRepo||"")+'" placeholder="alex/hiillos-data" '+
       'autocapitalize="off" autocorrect="off" spellcheck="false" '+
       'onchange="setStr(\'ghRepo\',this.value)"></label>'+
-    '<label class="row"><div class="grow"><div class="ttl t-body">File</div>'+
+    '<label class="row stack"><div class="grow"><div class="ttl t-body">File</div>'+
       '<div class="sub2 t-foot">path inside the repo</div></div>'+
       '<input type="text" value="'+esc(S.profile.ghPath||"hiillos.json")+'" '+
       'autocapitalize="off" autocorrect="off" spellcheck="false" '+
       'onchange="setStr(\'ghPath\',this.value)"></label>'+
-    '<label class="row"><div class="grow"><div class="ttl t-body">Token</div>'+
+    '<label class="row stack"><div class="grow"><div class="ttl t-body">Token</div>'+
       '<div class="sub2 t-foot">'+(tok ? "stored on this device \u00b7 "+tok.length+
         " characters" : "fine-grained, Contents: read and write")+'</div></div>'+
-      '<input type="password" placeholder="'+(tok?"\u2022\u2022\u2022\u2022 replace":"github_pat_\u2026")+'" '+
+      '<input type="password" placeholder="'+(tok?"paste a new one to replace it":"github_pat_\u2026")+'" '+
       'autocapitalize="off" autocorrect="off" spellcheck="false" '+
       'onchange="setToken(this)"></label>'+
     '<label class="row" data-press><div class="grow"><div class="ttl t-body">Sync automatically</div>'+
@@ -3561,17 +3581,27 @@ function ghSection(){
         (ok?'Sync now':'Fill in a repo and token first')+'</button>'+
     '</div>'+
     '<div class="note" style="border-top:.5px solid var(--sep)">'+
-      '<b>Free, all of it.</b> GitHub Free includes unlimited private repos and '+
-      '5,000 API calls an hour; this app uses a few dozen a day. '+
-      '<b>Set it up:</b> make an empty private repo, then Settings \u2192 Developer '+
-      'settings \u2192 Personal access tokens \u2192 Fine-grained tokens. Give it access to '+
-      'that one repository only, with <i>Repository permissions \u2192 Contents: '+
-      'Read and write</i>. Nothing else. Paste it above. '+
-      '<b>Worth knowing:</b> a token in a phone browser is a real if small risk, so keep the '+
-      'repo private, set an expiry you\u2019ll actually renew, and revoke it if the phone goes '+
-      'missing. It is stored separately from your log, so an exported backup never contains it. '+
-      'Every push reads the remote and merges before writing, so logging on two devices can\u2019t '+
-      'silently clobber a day.'+
+      '<b>All of this is free.</b> GitHub Free includes unlimited private repos and '+
+      '5,000 API calls an hour. This app uses a few dozen a day.'+
+    '</div>'+
+    '<div class="note" style="padding-top:0">'+
+      '<div style="font-weight:600;color:var(--label);margin-bottom:6px">Setting it up</div>'+
+      '<ol class="steps">'+
+        '<li>Make a new repository. Name it anything; tick <b>Private</b>.</li>'+
+        '<li>Settings \u2192 Developer settings \u2192 Personal access tokens '+
+            '\u2192 <b>Fine-grained tokens</b> \u2192 Generate new token.</li>'+
+        '<li>Repository access: <b>only that one repo</b>.</li>'+
+        '<li>Repository permissions \u2192 <b>Contents: Read and write</b>. '+
+            'Nothing else needs enabling.</li>'+
+        '<li>Paste the token above, then tap <b>Sync now</b>.</li>'+
+      '</ol>'+
+    '</div>'+
+    '<div class="note" style="border-top:.5px solid var(--sep)">'+
+      '<b>Worth knowing.</b> A token stored in a phone browser is a real if small risk: '+
+      'keep the repo private, set an expiry you will actually renew, and revoke it if the '+
+      'phone goes missing. It lives under its own key rather than inside your log, so an '+
+      'exported backup never contains it. Every push reads the remote and merges before '+
+      'writing, so logging on two devices cannot silently clobber a day.'+
     '</div></div>';
   return h;
 }
