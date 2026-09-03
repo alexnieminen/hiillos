@@ -26,10 +26,15 @@
   --label:#FFF4E8; --label2:rgba(255,238,222,.60); --label3:rgba(255,238,222,.32);
   --sep:rgba(255,178,110,.13);
 
-  --ember:#FF7A18;      /* primary — the live coal */
-  --ember-hi:#FFB43D;   /* hotter */
-  --ember-lo:#C2400F;   /* cooling */
-  --char:#5A1B08;       /* nearly out */
+  /* An ORDERED heat ramp, not four interchangeable oranges. A fire has a
+     gradient, so the palette can carry meaning instead of just decorating:
+     banked coal for the energy you spend lying still, flame for the energy
+     you spend on purpose. Used in that order by the composition bar. */
+  --char:#5A1B08;       /* h1 — banked, nearly out: resting metabolism */
+  --ember-lo:#8E2E0B;   /* h2 — smouldering: incidental movement */
+  --ember:#FF7A18;      /* h3 — the live coal, and the primary accent */
+  --ember-hi:#FFB43D;   /* h4 — flame: deliberate training */
+  --ash:#E8C9A0;        /* h5 — pale, off the ramp: digestion */
 
   --good:#5FD08A;       /* one cool note, so "on target" reads instantly */
   --warn:#FFB43D;
@@ -95,12 +100,57 @@ input,textarea{-webkit-user-select:text; user-select:text}
 @supports (touch-action: pan-y pinch-zoom){
   #stage{touch-action:pan-y pinch-zoom}   /* keep accessibility zoom */
 }
-.pane{width:100%; max-width:620px; margin:0 auto;
-      padding:max(4px,env(safe-area-inset-top)) 16px 0}
-.pane.ghost{position:absolute; top:0; left:0; right:0;
-            padding-top:max(4px,env(safe-area-inset-top))}
+.pane{width:100%; max-width:620px; margin:0 auto; padding:0 16px}
+.pane.ghost{position:absolute; top:0; left:0; right:0}
 
-h1{margin:12px 0 2px}
+/* ============================================================
+   Brand bar — the app had no mark anywhere and "Hiillos" appeared only in
+   the browser tab. FIXED rather than part of the pane, for the same reason
+   the tab bar is: it exists once, it never scrolls away, and the
+   neighbouring days sliding under your finger don't each carry a copy of
+   it. Same translucent chrome as the bottom bar so they read as a pair.
+
+   The wordmark is set in the system serif against the sans UI — that
+   contrast is what gives an app a voice, and it costs no download, so the
+   app still works offline.
+   ============================================================ */
+.topbar{
+  position:fixed; top:0; left:0; right:0; z-index:55;
+  display:flex; align-items:center; gap:9px;
+  padding:max(6px,env(safe-area-inset-top)) 16px 8px;
+  background:var(--chrome);
+  backdrop-filter:saturate(180%) blur(24px); -webkit-backdrop-filter:saturate(180%) blur(24px);
+  box-shadow:inset 0 -.5px 0 var(--chrome-edge);
+}
+.topbar .mark{
+  width:30px; height:30px; flex:0 0 auto; display:block;
+  /* the mark's own background is #080708 against the app's #0A0908 — two
+     values apart out of 255, so it needs no mask or rounding to sit flush */
+}
+.topbar .word{
+  /* Superclarendon: a slab serif, and the best display face that ships on
+     both iOS and macOS. Slabs carry weight and warmth — the letterforms look
+     stamped into something — which suits a name meaning "embers" far better
+     than the default New York, and far better than any geometric sans. All
+     system faces, so nothing is downloaded and the app still opens offline.
+     Slabs also want slightly tighter tracking than body text at this size. */
+  font-family:"Superclarendon","Iowan Old Style","Charter",ui-serif,Georgia,serif;
+  font-optical-sizing:auto;
+  font-size:21px; font-weight:600; letter-spacing:-.012em;
+  color:var(--ember); line-height:1;
+  /* the descender-free wordmark sits optically low against a 30px mark */
+  transform:translateY(-.5px);
+}
+.topbar .spacer{flex:1}
+.topbar .phase{
+  font-size:11px; color:var(--label3); letter-spacing:.02em;
+  font-variant-numeric:tabular-nums; text-align:right; line-height:1.25;
+}
+
+/* every pane clears the fixed bar */
+.pane, .pane.ghost{padding-top:calc(46px + max(6px,env(safe-area-inset-top)))}
+
+h1{margin:6px 0 2px}
 .sectionhead{display:flex; align-items:baseline; justify-content:space-between;
              gap:10px; margin:26px 0 8px; padding:0 4px}
 .sectionhead a{color:var(--blue); cursor:pointer; font-size:14px; font-weight:500}
@@ -179,6 +229,31 @@ textarea{background:var(--fill); border-radius:var(--r-ctl); padding:11px 13px; 
   transform:scaleX(0); transform-origin:left center; will-change:transform}
 .macro .qt{flex:0 0 auto; font-variant-numeric:tabular-nums; color:var(--label2);
   font-size:12px; min-width:70px; text-align:right}
+
+/* ============================================================
+   Composition bar — the burn card used to be eight rows of near-identical
+   text, which is a receipt rather than a picture. This makes the shape of
+   the day legible at a glance: that roughly two thirds of it is you lying
+   still, and that a whole day of walking is a sliver.
+   ============================================================ */
+.comp{padding:16px 16px 14px}
+.comp .tot{display:flex; align-items:baseline; gap:8px; margin-bottom:2px; padding:0; border:none}
+.comp .tot b{font-size:34px; font-weight:700; letter-spacing:-.028em; line-height:1;
+             font-variant-numeric:tabular-nums; color:var(--label)}
+.comp .tot span{font-size:13px; color:var(--label2)}
+.comp .bar{display:flex; height:26px; border-radius:7px; overflow:hidden; margin:11px 0 10px;
+           background:var(--fill)}
+.comp .bar i{display:block; min-width:0; transition:width 260ms cubic-bezier(.25,.8,.35,1)}
+.comp .leg{display:flex; flex-wrap:wrap; gap:5px 14px}
+.comp .leg span{font-size:11.5px; color:var(--label2); display:flex; align-items:center; gap:5px;
+                font-variant-numeric:tabular-nums}
+.comp .leg i{width:8px; height:8px; border-radius:2px; flex:0 0 auto}
+.disc{display:flex; align-items:center; justify-content:space-between; gap:10px;
+      padding:12px 16px; cursor:pointer; color:var(--blue); font-size:14px; font-weight:500;
+      background:none; border:none; width:100%; text-align:left;
+      border-top:.5px solid var(--sep)}
+.disc .car{transition:transform 200ms cubic-bezier(.25,.8,.35,1); font-size:17px; line-height:1}
+.disc[aria-expanded="true"] .car{transform:rotate(90deg)}
 
 .kv{display:flex; justify-content:space-between; gap:12px; padding:9px 16px;
     font-size:15px; letter-spacing:-.006em; border-bottom:.5px solid var(--sep)}
@@ -288,6 +363,7 @@ textarea{background:var(--fill); border-radius:var(--r-ctl); padding:11px 13px; 
 </style>
 </head>
 <body>
+<header class="topbar" id="topbar"></header>
 <div id="clip"><div id="stage"><div class="pane" id="root"></div></div></div>
 <nav class="tabbar" id="tabbar"></nav>
 <div class="toast" id="toast"></div>
@@ -358,7 +434,19 @@ var DEFAULT_PROFILE = {
      for twice: once as walking, and again as "you must have been busier". */
   metIdle:1.25,       // idle intensity at your habitual step level
   stepsRef:3500,      // the step level metIdle was calibrated at
-  neatSlope:0.024,    // MET per 1000 steps of HABITUAL level above stepsRef
+  /* ZERO by default, deliberately. This encodes the cross-sectional
+     observation that people who walk more also stand and fidget more, as MET
+     per 1000 habitual steps. It holds BETWEEN people and is unreliable WITHIN
+     one person, and switching it on re-creates the very double-count this
+     model exists to remove — one level up from the daily case.
+
+     Concretely: take up a 4,000-step evening walk every day and the walking
+     term correctly adds about 140 kcal, while at 0.024 the idle term adds
+     another 115 for the same behaviour. A deliberate exercise bout is not
+     evidence that your school day involved more standing. Leave it at 0, let
+     the walking term price walking, and move metIdle if your actual lifestyle
+     activity changes — or let the measured calibration find it. */
+  neatSlope:0,        // MET per 1000 steps of HABITUAL level above stepsRef
 
   /* Activity above your habitual baseline is credited at less than face value.
      Exercise-compensation work finds total daily expenditure rises by well
@@ -604,6 +692,11 @@ if(!S.plan) S.plan = JSON.parse(JSON.stringify(DEFAULT_PLAN));
 Object.keys(DEFAULT_PLAN).forEach(function(k){ if(S.plan[k]===undefined) S.plan[k]=DEFAULT_PLAN[k]; });
 if(!S.plan.bands || !S.plan.bands.length) S.plan.bands = DEFAULT_PLAN.bands.slice();
 if(!S.plan.windows) S.plan.windows = [];
+/* A band's label is DERIVED from its thresholds, so a stored one goes stale
+   the moment a threshold moves — and a file saved before the band editor
+   existed can carry a label that flatly contradicts its own numbers. Re-derive
+   every label on load so no reader can pick up a lie. */
+S.plan.bands.forEach(function(b,i){ b.label = bandLabel(i); });
 
 /* Schema 2: the energy model became physiologically complete.
    The old 0.055 kcal/step was the GROSS cost of walking, which includes the
@@ -750,6 +843,12 @@ Store.save(S);
 }
 
 var view = "today";
+/* Whether the burn itemisation is open. Remembered, because someone who wants
+   the detail wants it every day, and someone who doesn't shouldn't have to
+   close it every day. */
+var burnOpen = (function(){
+  try{ return localStorage.getItem("hiillos_burn_open") === "1"; }catch(e){ return false; }
+})();
 var today = iso(new Date());
 var cur = today;
 var fbMode = "avg";
@@ -1050,9 +1149,55 @@ function computeCalibration(){
   var kgPerDay = (first.avg - last.avg) / span;
   var trueTDEE = intake + kgPerDay * 7700;
   var factor = trueTDEE / modeled;
+
+  /* 7700 kcal/kg is the energy in a kilo of FAT. Water and glycogen weigh the
+     same and cost essentially nothing, so any window containing a glycogen
+     swing — the first fortnight of a cut, a return to training, a big carb
+     change — reads as a far larger deficit than you actually ran. Left
+     unchecked this concludes the model UNDER-estimates your burn and offers
+     to raise your targets, on the strength of water you already lost.
+
+     So compare the measured rate against what the deficits actually in force
+     could physically produce. Well outside that, and the window is telling
+     you about body water, not about your metabolism. */
+  var plannedPerDay = 0;
+  logged.forEach(function(dd){ plannedPerDay += deficitFor(dd)/7700; });
+  plannedPerDay = logged.length ? plannedPerDay/logged.length : 0;
+  var ratio = plannedPerDay > 0 ? kgPerDay/plannedPerDay : 0;
+
+  /* A fast rate on its own is AMBIGUOUS, and that is the trap. Losing quicker
+     than the deficit predicts means either you dumped water, or the model
+     genuinely under-counts your burn — and telling those apart is the entire
+     point of this page, so we cannot just threshold the rate.
+
+     What separates them is the SHAPE. Glycogen and its water leave once and
+     do not come back, so a transient shows up as loss that is front-loaded
+     and then decelerates. A model that is simply wrong produces the same
+     excess rate in both halves of the window. So compare the halves. */
+  var midDate = shift(first.d, Math.round(span/2)), mid = null;
+  for(var mi=0; mi<ma.length; mi++)
+    if(ma[mi].n >= 4 && ma[mi].d <= midDate) mid = ma[mi];
+
+  var frontLoaded = false, r1 = null, r2 = null;
+  if(mid && mid.d > first.d && mid.d < last.d){
+    var d1 = dayDiff(mid.d, first.d), d2 = dayDiff(last.d, mid.d);
+    if(d1 >= 4 && d2 >= 4){
+      r1 = (first.avg - mid.avg) / d1;      // kg/day over the first half
+      r2 = (mid.avg  - last.avg) / d2;      // kg/day over the second half
+      /* decelerating sharply, and the early half beyond what calories allow */
+      frontLoaded = r1 > Math.max(r2 * 1.5, r2 + 0.02) &&
+                    plannedPerDay > 0 && r1 > plannedPerDay * 1.25;
+    }
+  }
+  var suspect = plannedPerDay > 0 &&
+                (frontLoaded || ratio > 2.0 || ratio < -0.5);
+
   return { intake:intake, modeled:modeled, trueTDEE:trueTDEE, factor:factor,
            clamped: Math.max(0.85, Math.min(1.15, factor)),
-           days:logged.length, span:span, coverage: logged.length/(span+1) };
+           days:logged.length, span:span, coverage: logged.length/(span+1),
+           kgPerDay:kgPerDay, plannedPerDay:plannedPerDay, ratio:ratio,
+           suspect:suspect, frontLoaded:frontLoaded, r1:r1, r2:r2,
+           from:first.d, to:last.d };
 }
 function calFactor(){
   if(!S.profile.calibrate) return 1;
@@ -1094,7 +1239,16 @@ function isNoiseLine(line){
      "\u00e4" as a NON-word character outside Unicode mode — so "yhteens\u00e4 "
      had no boundary at all and a Finnish totals row was logged as food. */
   if(/^(?:total|totals|sum|summa|yhteens\u00e4|kaikki yhteens\u00e4|day total|daily total)(?![\w\u00c0-\u017f])/.test(t)) return true;
-  if(/^(name|item|food|ruoka)\s*\|/.test(t)) return true;
+  /* A header row like "Name | kcal | protein | carbs | fat" is caught by the
+     no-digits rule above. This extra rule exists for headers that DO contain a
+     digit ("kcal per 100 g"), but it must not eat a food that happens to be
+     called Item or Ruoka — so it only fires when the row has fewer than two
+     genuinely numeric cells. */
+  if(/^(name|item|food|ruoka|tuote)\s*[|\t;]/.test(t)){
+    var cells = t.split(/\s*[|\t;]\s*/).slice(1);
+    var numeric = cells.filter(function(c){ return /^\s*\d+(?:[.,]\d+)?\s*$/.test(c); }).length;
+    if(numeric < 2) return true;
+  }
   return false;
 }
 function num(x){
@@ -1471,7 +1625,7 @@ function paintPane(pane, d, sp, instant){
   setText(pane, '.js-qt[data-m="p"]', Math.round(e.p)+" / "+P.proteinTarget+"g");
   setText(pane, '.js-qt[data-m="c"]', Math.round(e.c)+"g");
   setText(pane, '.js-qt[data-m="f"]', Math.round(e.f)+"g");
-  setText(pane, '.js-qt[data-m="k"]', Math.round(e.k)+" / "+Math.round(target));
+  setText(pane, ".js-ringof", Math.round(e.k)+" / "+Math.round(target));
 
   /* ---- walking ---- */
   setText(pane, ".js-stepkcal", Math.round(b.steps));
@@ -1506,6 +1660,35 @@ function paintPane(pane, d, sp, instant){
     " \u00b7 protein 25%, carbs 7.5%, fat 2.5%");
 
   setText(pane, ".js-outtot", Math.round(b.total));
+  setText(pane, ".js-palx", n1(b.pal));
+
+  /* The composition bar. Ordered coolest-first so the ramp reads as heat:
+     what you burn lying still, then incidental movement, then walking, then
+     deliberate training, then digestion off the end of the ramp. */
+  var parts = [
+    {k:"Resting",  v:b.bmr,      c:"var(--char)"},
+    {k:"Awake",    v:b.neat,     c:"var(--ember-lo)"},
+    {k:"Walking",  v:b.steps,    c:"var(--ember)"},
+    {k:"Training", v:b.gym + b.football, c:"var(--ember-hi)"},
+    {k:"Digesting",v:b.tef,      c:"var(--ash)"}
+  ];
+  var sum = parts.reduce(function(a,p){ return a + Math.max(0,p.v); }, 0) || 1;
+  var barEl = pane.querySelector(".js-compbar");
+  if(barEl){
+    barEl.innerHTML = parts.map(function(p){
+      var pc = Math.max(0, p.v)/sum*100;
+      return pc < 0.4 ? "" :
+        '<i style="width:'+pc.toFixed(2)+'%;background:'+p.c+'" title="'+p.k+'"></i>';
+    }).join("");
+  }
+  var legEl = pane.querySelector(".js-complegend");
+  if(legEl){
+    legEl.innerHTML = parts.map(function(p){
+      var pc = Math.max(0, p.v)/sum*100;
+      if(pc < 0.4) return "";
+      return '<span><i style="background:'+p.c+'"></i>'+p.k+' '+Math.round(pc)+'%</span>';
+    }).join("");
+  }
 
   var cmp = pane.querySelector(".js-comprow");
   if(cmp) cmp.style.display = np.compSaved > 0.5 ? "" : "none";
@@ -1515,9 +1698,11 @@ function paintPane(pane, d, sp, instant){
   if(palEl) palEl.innerHTML = 'That is <b>'+n1(b.pal)+'\u00d7</b> your resting rate. '+
     'For reference: complete bedrest \u22481.2, sedentary day 1.4\u20131.5, hard training day 2+.';
 
+  /* Only ONE number is allowed to be loud per screen, and the ring owns it.
+     This line used to bold all three figures, so the eye had nowhere to land. */
   var bl = pane.querySelector(".js-burnline");
-  if(bl) bl.innerHTML = 'Burn <b>'+Math.round(b.total)+'</b> \u2212 deficit <b>'+
-    Math.round(b.deficit)+'</b> = eat <b>'+Math.round(target)+'</b> kcal'+
+  if(bl) bl.innerHTML = 'Burn '+Math.round(b.total)+' \u2212 deficit '+
+    Math.round(b.deficit)+' = eat <b>'+Math.round(target)+'</b> kcal'+
     (target<1500?' <span class="pill o">low day</span>':'')+
     '<div class="t-cap" style="color:var(--label3);margin-top:3px">'+deficitWhy(d)+'</div>';
 
@@ -1611,12 +1796,16 @@ function viewToday(d){
     '<div class="ringwrap">'+ringSVG(104,11,"var(--blue)")+
       '<div class="ringtxt" role="status" aria-live="polite">'+
       '<b class="js-ringnum">0</b>'+
-      '<span class="js-ringlbl">left</span></div></div>'+
+      '<span class="js-ringlbl">left</span>'+
+      '<span class="js-ringof" style="font-size:10px;color:var(--label3);margin-top:1px"></span>'+
+      '</div></div>'+
     '<div class="macros">'+
-      macroBar("Protein","p","#FF5A3C")+
-      macroBar("Carbs",  "c","#FFB43D")+
-      macroBar("Fat",    "f","#F2D9A0")+
-      macroBar("Eaten",  "k","var(--ember)")+
+      /* The old "Eaten" bar plotted eaten/target — which is precisely what
+         the ring beside it already shows, four centimetres away. The figure
+         itself is useful, so it moved under the ring instead. */
+      macroBar("Protein","p","var(--bad)")+
+      macroBar("Carbs",  "c","var(--ember-hi)")+
+      macroBar("Fat",    "f","var(--ash)")+
     '</div></div>'+
     '<div class="note js-burnline" style="border-top:.5px solid var(--sep)"></div>'+
   '</div>';
@@ -1640,36 +1829,51 @@ function viewToday(d){
        '<div class="card js-entries">'+entriesHTML(d)+'</div>';
 
   h += '<h2 class="t-section" style="margin:26px 0 8px 4px">The burn</h2><div class="card">'+
+
+    /* The shape of the day first, the itemisation on request. */
+    '<div class="comp">'+
+      '<div class="tot"><b class="js-outtot">'+Math.round(b.total)+'</b>'+
+        '<span>kcal out \u00b7 <span class="js-palx">'+n1(b.pal)+'</span>\u00d7 resting</span></div>'+
+      '<div class="bar js-compbar" role="img" aria-label="What today\u2019s burn is made of"></div>'+
+      '<div class="leg js-complegend"></div>'+
+    '</div>'+
+
+    /* Inputs stay above the fold — collapsing these would mean opening a
+       disclosure every time you type a step count. */
     numRow("Walking", '<span class="js-stepsub"></span>',
       x.steps||0, "setDay('steps',this.value)", "1",
       '<span class="js-stepkcal">'+Math.round(b.steps)+'</span>')+
-    '<div class="kv js-comprow" style="display:none"><span>Compensation on the extra'+
-      '<br><span class="t-cap" style="color:var(--label3)">activity above your usual level '+
-      'doesn\u2019t pay full price</span></span><span class="js-comp"></span></div>'+
     '<label class="row" data-press><div class="grow"><div class="ttl t-body">Gym</div>'+
       '<div class="sub2 t-foot">flat '+P.gymKcal+' kcal</div></div>'+
       '<input type="checkbox" style="width:20px;height:20px;accent-color:var(--ember)" '+
       (x.gym?"checked":"")+' onchange="setDay(\'gym\',this.checked)"></label>'+
     '<div class="row ctl" data-press onclick="nav(\'football\')" style="cursor:pointer">'+
       '<div class="grow"><div class="ttl t-body">Football</div>'+
-      '<div class="sub2 t-foot">'+(b.fb ? Math.round(b.fb.mins)+" min · tap to edit" : "not logged — tap to add")+'</div></div>'+
-      '<span class="val big t-body">'+(b.football?Math.round(b.football):"—")+'</span><span class="chev">›</span></div>'+
-    '<div class="kv"><span>Resting (BMR)<br><span class="t-cap js-bmrsub" '+
-      'style="color:var(--label3)"></span></span><span class="js-bmr">'+Math.round(b.bmr)+'</span></div>'+
-    '<div class="kv" style="display:block">'+
-      '<div style="display:flex;justify-content:space-between;gap:12px">'+
-        '<span>Everything else awake</span>'+
-        '<span class="js-idle">'+Math.round(b.neat)+'</span></div>'+
-      '<div class="t-cap js-idlesub" style="color:var(--label3);margin-top:2px"></div>'+
+      '<div class="sub2 t-foot">'+(b.fb ? Math.round(b.fb.mins)+" min \u00b7 tap to edit" : "not logged \u2014 tap to add")+'</div></div>'+
+      '<span class="val big t-body">'+(b.football?Math.round(b.football):"\u2014")+'</span><span class="chev">\u203a</span></div>'+
+
+    '<button class="disc" data-press aria-expanded="'+(burnOpen?"true":"false")+'" '+
+      'onclick="toggleBurn(this)"><span>'+(burnOpen?"Hide":"Show")+' the numbers</span>'+
+      '<span class="car">\u203a</span></button>'+
+    '<div class="js-burndetail" style="display:'+(burnOpen?"block":"none")+'">'+
+      '<div class="kv"><span>Resting (BMR)<br><span class="t-cap js-bmrsub" '+
+        'style="color:var(--label3)"></span></span><span class="js-bmr">'+Math.round(b.bmr)+'</span></div>'+
+      '<div class="kv" style="display:block">'+
+        '<div style="display:flex;justify-content:space-between;gap:12px">'+
+          '<span>Everything else awake</span>'+
+          '<span class="js-idle">'+Math.round(b.neat)+'</span></div>'+
+        '<div class="t-cap js-idlesub" style="color:var(--label3);margin-top:2px"></div>'+
       '</div>'+
-    '<div class="kv"><span>Digesting (TEF)<br><span class="t-cap js-tefsub" '+
-      'style="color:var(--label3)"></span></span><span class="js-tef">'+
-      Math.round(b.tef)+'</span></div>'+
-    (b.cal !== 1 ? '<div class="kv"><span>Measured correction</span><span>×'+n1(b.cal)+'</span></div>' : '')+
-    '<div class="kv tot"><span>Total out</span><span class="js-outtot">'+
-      Math.round(b.total)+'</span></div>'+
-    '<div class="note js-actual" style="border-top:.5px solid var(--sep)"></div>'+
-    '<div class="note js-pal" style="border-top:.5px solid var(--sep)"></div>'+
+      '<div class="kv js-comprow" style="display:none"><span>Compensation on the extra'+
+        '<br><span class="t-cap" style="color:var(--label3)">activity above your usual level '+
+        'doesn\u2019t pay full price</span></span><span class="js-comp"></span></div>'+
+      '<div class="kv"><span>Digesting (TEF)<br><span class="t-cap js-tefsub" '+
+        'style="color:var(--label3)"></span></span><span class="js-tef">'+
+        Math.round(b.tef)+'</span></div>'+
+      (b.cal !== 1 ? '<div class="kv"><span>Measured correction</span><span>\u00d7'+n1(b.cal)+'</span></div>' : '')+
+      '<div class="note js-actual"></div>'+
+      '<div class="note js-pal" style="border-top:.5px solid var(--sep)"></div>'+
+    '</div>'+
   '</div>';
 
   var todayW = S.weights.filter(function(q){ return q.d===d; })[0];
@@ -1688,6 +1892,35 @@ function viewToday(d){
     '<div style="height:20px"></div>';
   return h;
 }
+/* The mark is the app icon that is ALREADY in <head> as a data URI — read
+   back off the <link> rather than embedded a second time, so it costs no
+   extra bytes and swapping the icon automatically updates the header too. */
+function renderTopbar(){
+  var bar = el("topbar"); if(!bar) return;
+  var lnk = document.querySelector('link[rel="apple-touch-icon"], link[rel="icon"]');
+  var src = lnk && lnk.getAttribute("href");
+  var mark = src
+    ? '<img class="mark" src="'+src+'" alt="" aria-hidden="true">'
+    /* fallback if the icon is ever removed: the calorie ring as a mark */
+    : '<svg class="mark" viewBox="0 0 32 32" aria-hidden="true">'+
+        '<circle cx="16" cy="16" r="12.5" fill="none" stroke="var(--char)" stroke-width="4.2"/>'+
+        '<path d="M16 3.5a12.5 12.5 0 0 1 11.4 7.4" fill="none" stroke="var(--ember-hi)" '+
+          'stroke-width="4.2" stroke-linecap="round"/>'+
+        '<circle cx="16" cy="16" r="3.1" fill="var(--ember-hi)"/></svg>';
+
+  var win = planWindowFor(today);
+  var band = win || planBandFor(trendWeightAt(today));
+  var sub = !band ? ""
+    : esc(win ? (win.label || "maintenance")
+              : bandLabel((S.plan.bands||[]).indexOf(band))) +
+      " \u00b7 " + Math.round(deficitFor(today)) + " kcal";
+
+  bar.innerHTML = mark +
+    '<span class="word">Hiillos</span>' +
+    '<span class="spacer"></span>' +
+    (sub ? '<span class="phase">'+sub+'</span>' : '');
+}
+
 function macroBar(name, m, color){
   return '<div class="macro"><span class="nm">'+name+'</span>'+
     '<div class="bar"><i class="js-bar" data-m="'+m+'" style="background:'+color+'"></i></div>'+
@@ -2031,9 +2264,44 @@ function calibrationSection(){
       'formulas guess.</div></div>';
   }
   var off = (c.factor - 1) * 100;
-  var pill = Math.abs(off) < 4 ? '<span class="pill g">model is within '+Math.abs(Math.round(off))+'%</span>'
-           : '<span class="pill o">model is '+(off>0?"under":"over")+' by '+Math.abs(Math.round(off))+'%</span>';
+  var pill = c.suspect
+    ? '<span class="pill r">this window is not usable</span>'
+    : Math.abs(off) < 4 ? '<span class="pill g">model is within '+Math.abs(Math.round(off))+'%</span>'
+    : '<span class="pill o">model is '+(off>0?"under":"over")+' by '+Math.abs(Math.round(off))+'%</span>';
   var on = !!P.calibrate;
+
+  if(c.suspect){
+    /* Wait until the whole window sits after the swing. */
+    var clean = shift(c.to, 15);
+    return h +
+      '<div class="kv"><span>Scale says you lost</span><span>'+n1(c.kgPerDay*7)+' kg/wk</span></div>'+
+      '<div class="kv"><span>Your deficits allow</span><span>'+n1(c.plannedPerDay*7)+' kg/wk</span></div>'+
+      (c.frontLoaded
+        ? '<div class="kv"><span>First half of the window</span><span>'+n1(c.r1*7)+' kg/wk</span></div>'+
+          '<div class="kv"><span>Second half</span><span>'+n1(c.r2*7)+' kg/wk</span></div>'
+        : '<div class="kv"><span>Ratio</span><span>'+n1(c.ratio)+'\u00d7 too fast</span></div>')+
+      '<div style="padding:12px 16px;border-top:.5px solid var(--sep)">'+
+        '<div style="margin-bottom:7px">'+pill+'</div>'+
+        '<div class="t-sub" style="color:var(--label2);line-height:1.5">'+
+          (c.frontLoaded
+            ? 'The loss is <b>front-loaded</b>: '+n1(c.r1*7)+' kg/wk across the first half of '+
+              'this window and '+n1(c.r2*7)+' across the second. Fat does not come off in that '+
+              'shape \u2014 a steady deficit gives a steady rate. Losing fast and then '+
+              'decelerating is the signature of glycogen and the water bound to it leaving once, '+
+              'which is exactly what happens at the start of a cut or after going back to training.'
+            : 'The scale fell '+n1(c.ratio)+'\u00d7 faster than the calories can explain.')+
+          ' This calculation values every lost kilo at 7700 kcal, the energy in <i>fat</i>, so it '+
+          'would conclude you burn far more than you do and offer you more food on the strength '+
+          'of water that has already gone.'+
+          '<br><br>Nothing is wrong with your logging. It clears itself: once the whole '+
+          '14-day window sits after the drop, around <b>'+
+          new Date(clean+"T12:00").toLocaleDateString(undefined,{day:"numeric",month:"long"})+
+          '</b>, this page starts telling you something real.'+
+        '</div>'+
+        (on ? '<div style="margin-top:11px"><button class="btn danger ctl" data-press '+
+              'onclick="toggleCal()">Turn the correction off \u2014 it is using this window</button></div>' : '')+
+      '</div></div>';
+  }
   return h +
     '<div class="kv"><span>You actually burn</span><span>'+Math.round(c.trueTDEE)+' kcal/day</span></div>'+
     '<div class="kv"><span>The model says</span><span>'+Math.round(c.modeled)+' kcal/day</span></div>'+
@@ -2444,7 +2712,16 @@ function viewSetup(){
       })(),
       P.stepsRef, "setP('stepsRef',this.value)", "250", "")+
     numRow("A busier life lifts it by",
-      "per 1000 steps of measured habit above the anchor \u00b7 0 to pin idle intensity",
+      "per 1000 steps of measured habit above the anchor. <b>0 is recommended</b> \u2014 "+
+      "above 0 it re-creates the double-count, because taking up a daily walk is not "+
+      "evidence your other hours got busier"+
+      ((+P.neatSlope||0) > 0
+        ? ". Yours is on, adding about "+
+          Math.round(Math.max(0, idleMet(P) - (+P.metIdle||1.25)) * (bmrAt(today)/1440) *
+            Math.max(0, (+P.wakingHours||16)*60 - 90)) +
+          " kcal/day. <a onclick=\'setP(&quot;neatSlope&quot;,0)\' "+
+          "style=\'color:var(--blue);cursor:pointer\'>Set to 0</a>"
+        : ""),
       P.neatSlope, "setP('neatSlope',this.value)", "0.002", "MET")+
     numRow("Gym session","flat add", P.gymKcal, "setP('gymKcal',this.value)", "10", "kcal")+
     numRow("Gym duration","so those minutes leave the awake pool", P.gymMins,
@@ -2619,6 +2896,25 @@ function addWindow(){
   S.pm = Date.now(); save(); render(); toast("Window added");
 }
 function rmWindow(i){ S.plan.windows.splice(i,1); S.pm = Date.now(); save(); render(); }
+/* Toggles the itemisation, on every pane at once (the neighbouring days are
+   real DOM too, so leaving them out of step would show through on a swipe). */
+function toggleBurn(btn){
+  burnOpen = !burnOpen;
+  try{ localStorage.setItem("hiillos_burn_open", burnOpen ? "1" : "0"); }catch(e){}
+  var panes = document.querySelectorAll(".pane");
+  for(var i=0;i<panes.length;i++){
+    var d = panes[i].querySelector(".js-burndetail");
+    var b = panes[i].querySelector(".disc");
+    if(d) d.style.display = burnOpen ? "block" : "none";
+    if(b){
+      b.setAttribute("aria-expanded", burnOpen ? "true" : "false");
+      var lbl = b.querySelector("span");
+      if(lbl) lbl.textContent = (burnOpen ? "Hide" : "Show") + " the numbers";
+    }
+  }
+  haptic(6);
+}
+
 function setBmrMode(v){ S.profile.bmrMode = v; S.pm = Date.now(); save(); render(); }
 
 /* =================================================================
@@ -2733,7 +3029,8 @@ function copyProfile(){
   var band = planBandFor(trendWeightAt(today));
   copy("Context for my cut:\n"+
     "Male, "+P.age+", "+P.height+" cm, "+n1(w)+" kg, "+n1(P.leanMass)+" kg lean mass.\n"+
-    "Plan: phase "+(band?band.label:"—")+" on a "+Math.round(b.deficit)+
+    "Plan: phase "+(band?bandLabel((S.plan.bands||[]).indexOf(band)):"—")+
+      " on a "+Math.round(b.deficit)+
     " kcal/day deficit, so about "+n1(tr.mid)+" kg/week. Ending at "+
     n1(P.goalWeight)+" kg (~"+P.goalBF+"% body fat). Protein target "+P.proteinTarget+" g.\n"+
     "Today's numbers: burn "+Math.round(b.total)+" kcal, so eat "+Math.round(b.target)+".\n"+
@@ -3546,6 +3843,7 @@ function render(){
   else                       r.innerHTML = viewSetup();
 
   renderTabs();
+  renderTopbar();
   if(view==="today"){ initTodaySprings(); syncToday(); Ghosts.schedule(); }
   if(view==="football") positionSeg(false);
 }
