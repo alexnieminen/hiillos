@@ -100,55 +100,10 @@ input,textarea{-webkit-user-select:text; user-select:text}
 @supports (touch-action: pan-y pinch-zoom){
   #stage{touch-action:pan-y pinch-zoom}   /* keep accessibility zoom */
 }
-.pane{width:100%; max-width:620px; margin:0 auto; padding:0 16px}
-.pane.ghost{position:absolute; top:0; left:0; right:0}
-
-/* ============================================================
-   Brand bar — the app had no mark anywhere and "Hiillos" appeared only in
-   the browser tab. FIXED rather than part of the pane, for the same reason
-   the tab bar is: it exists once, it never scrolls away, and the
-   neighbouring days sliding under your finger don't each carry a copy of
-   it. Same translucent chrome as the bottom bar so they read as a pair.
-
-   The wordmark is set in the system serif against the sans UI — that
-   contrast is what gives an app a voice, and it costs no download, so the
-   app still works offline.
-   ============================================================ */
-.topbar{
-  position:fixed; top:0; left:0; right:0; z-index:55;
-  display:flex; align-items:center; gap:9px;
-  padding:max(6px,env(safe-area-inset-top)) 16px 8px;
-  background:var(--chrome);
-  backdrop-filter:saturate(180%) blur(24px); -webkit-backdrop-filter:saturate(180%) blur(24px);
-  box-shadow:inset 0 -.5px 0 var(--chrome-edge);
-}
-.topbar .mark{
-  width:30px; height:30px; flex:0 0 auto; display:block;
-  /* the mark's own background is #080708 against the app's #0A0908 — two
-     values apart out of 255, so it needs no mask or rounding to sit flush */
-}
-.topbar .word{
-  /* Superclarendon: a slab serif, and the best display face that ships on
-     both iOS and macOS. Slabs carry weight and warmth — the letterforms look
-     stamped into something — which suits a name meaning "embers" far better
-     than the default New York, and far better than any geometric sans. All
-     system faces, so nothing is downloaded and the app still opens offline.
-     Slabs also want slightly tighter tracking than body text at this size. */
-  font-family:"Superclarendon","Iowan Old Style","Charter",ui-serif,Georgia,serif;
-  font-optical-sizing:auto;
-  font-size:21px; font-weight:600; letter-spacing:-.012em;
-  color:var(--ember); line-height:1;
-  /* the descender-free wordmark sits optically low against a 30px mark */
-  transform:translateY(-.5px);
-}
-.topbar .spacer{flex:1}
-.topbar .phase{
-  font-size:11px; color:var(--label3); letter-spacing:.02em;
-  font-variant-numeric:tabular-nums; text-align:right; line-height:1.25;
-}
-
-/* every pane clears the fixed bar */
-.pane, .pane.ghost{padding-top:calc(46px + max(6px,env(safe-area-inset-top)))}
+.pane{width:100%; max-width:620px; margin:0 auto;
+      padding:max(4px,env(safe-area-inset-top)) 16px 0}
+.pane.ghost{position:absolute; top:0; left:0; right:0;
+            padding-top:max(4px,env(safe-area-inset-top))}
 
 h1{margin:6px 0 2px}
 .sectionhead{display:flex; align-items:baseline; justify-content:space-between;
@@ -236,7 +191,15 @@ textarea{background:var(--fill); border-radius:var(--r-ctl); padding:11px 13px; 
          align-items:center; justify-content:center;
          max-width:100%; overflow:hidden}
 .ringtxt > *{max-width:74px; white-space:nowrap}
-.ringtxt .js-ringof{max-width:52px; overflow:hidden}
+
+/* Eaten sits under the macros rather than inside the ring: three lines of
+   type in an 82px circle was too much, and this is the natural home for a
+   running total — same right-hand column as the macro figures, with a rule
+   above it so it reads as their sum rather than a fourth macro. */
+.macro.sum{margin-top:3px; padding-top:8px; border-top:.5px solid var(--sep)}
+.macro.sum .nm{color:var(--label2)}
+.macro.sum .gap{flex:1; min-width:0}
+.macro.sum .qt{color:var(--label); font-weight:600; font-size:13px}
 /* The ring's inner circle is only 82px across, and a circle narrows as you
    move away from its centre — so a four-digit figure at 26px (66px wide
    against 63px of available chord) clipped the stroke, and the sub-line
@@ -402,7 +365,6 @@ textarea{background:var(--fill); border-radius:var(--r-ctl); padding:11px 13px; 
 </style>
 </head>
 <body>
-<header class="topbar" id="topbar"></header>
 <div id="clip"><div id="stage"><div class="pane" id="root"></div></div></div>
 <nav class="tabbar" id="tabbar"></nav>
 <div class="toast" id="toast"></div>
@@ -1672,10 +1634,7 @@ function paintPane(pane, d, sp, instant){
   setText(pane, '.js-qt[data-m="p"]', Math.round(e.p)+" / "+P.proteinTarget+"g");
   setText(pane, '.js-qt[data-m="c"]', Math.round(e.c)+"g");
   setText(pane, '.js-qt[data-m="f"]', Math.round(e.f)+"g");
-  /* "858 / 2411" repeated the target, which the burn line states in full
-     right below the card, and it was the widest thing in the ring. The one
-     figure not otherwise visible up here is what you have actually eaten. */
-  setText(pane, ".js-ringof", Math.round(e.k)+" eaten");
+  setText(pane, ".js-eatenq", Math.round(e.k)+" / "+Math.round(target));
 
   /* ---- walking ---- */
   setText(pane, ".js-stepkcal", Math.round(b.steps));
@@ -1856,7 +1815,6 @@ function viewToday(d){
       '<div class="ringtxt" role="status" aria-live="polite">'+
       '<b class="js-ringnum">0</b>'+
       '<span class="js-ringlbl">left</span>'+
-      '<span class="js-ringof" style="font-size:9px;color:var(--label3);margin-top:1px"></span>'+
       '</div></div>'+
     '<div class="macros">'+
       /* The old "Eaten" bar plotted eaten/target — which is precisely what
@@ -1865,6 +1823,8 @@ function viewToday(d){
       macroBar("Protein","p","var(--bad)")+
       macroBar("Carbs",  "c","var(--ember-hi)")+
       macroBar("Fat",    "f","var(--ash)")+
+      '<div class="macro sum"><span class="nm">Eaten</span><span class="gap"></span>'+
+        '<span class="qt js-eatenq"></span></div>'+
     '</div></div>'+
     '<div class="note js-burnline" style="border-top:.5px solid var(--sep)"></div>'+
   '</div>';
@@ -1951,35 +1911,6 @@ function viewToday(d){
     '<div style="height:20px"></div>';
   return h;
 }
-/* The mark is the app icon that is ALREADY in <head> as a data URI — read
-   back off the <link> rather than embedded a second time, so it costs no
-   extra bytes and swapping the icon automatically updates the header too. */
-function renderTopbar(){
-  var bar = el("topbar"); if(!bar) return;
-  var lnk = document.querySelector('link[rel="apple-touch-icon"], link[rel="icon"]');
-  var src = lnk && lnk.getAttribute("href");
-  var mark = src
-    ? '<img class="mark" src="'+src+'" alt="" aria-hidden="true">'
-    /* fallback if the icon is ever removed: the calorie ring as a mark */
-    : '<svg class="mark" viewBox="0 0 32 32" aria-hidden="true">'+
-        '<circle cx="16" cy="16" r="12.5" fill="none" stroke="var(--char)" stroke-width="4.2"/>'+
-        '<path d="M16 3.5a12.5 12.5 0 0 1 11.4 7.4" fill="none" stroke="var(--ember-hi)" '+
-          'stroke-width="4.2" stroke-linecap="round"/>'+
-        '<circle cx="16" cy="16" r="3.1" fill="var(--ember-hi)"/></svg>';
-
-  var win = planWindowFor(today);
-  var band = win || planBandFor(trendWeightAt(today));
-  var sub = !band ? ""
-    : esc(win ? (win.label || "maintenance")
-              : bandLabel((S.plan.bands||[]).indexOf(band))) +
-      " \u00b7 " + Math.round(deficitFor(today)) + " kcal";
-
-  bar.innerHTML = mark +
-    '<span class="word">Hiillos</span>' +
-    '<span class="spacer"></span>' +
-    (sub ? '<span class="phase">'+sub+'</span>' : '');
-}
-
 function macroBar(name, m, color){
   return '<div class="macro"><span class="nm">'+name+'</span>'+
     '<div class="bar"><i class="js-bar" data-m="'+m+'" style="background:'+color+'"></i></div>'+
@@ -3917,7 +3848,6 @@ function render(){
   else                       r.innerHTML = viewSetup();
 
   renderTabs();
-  renderTopbar();
   if(view==="today"){ initTodaySprings(); syncToday(); Ghosts.schedule(); }
   if(view==="football") positionSeg(false);
 }
