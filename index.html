@@ -105,7 +105,31 @@ input,textarea{-webkit-user-select:text; user-select:text}
 .pane.ghost{position:absolute; top:0; left:0; right:0;
             padding-top:max(4px,env(safe-area-inset-top))}
 
-h1{margin:6px 0 2px}
+/* ============================================================
+   Brand line — the mark and the name, sitting above the page title inside
+   the pane, so it scrolls away with the content instead of occupying a
+   permanent strip. Deliberately subordinate to the h1 below it: this is a
+   signature, not a headline, and "Today" is still the thing you came to read.
+
+   Superclarendon is a slab serif that ships on both iOS and macOS. Slabs
+   look stamped into something, which suits a name meaning embers, and being
+   a system face it costs no download — so the app still opens offline.
+   ============================================================ */
+.brandline{display:flex; align-items:center; gap:7px; padding:0 2px; margin:2px 0 5px}
+.brandline .mark{
+  width:22px; height:22px; flex:0 0 auto; display:block;
+  /* the mark's own ground is #080708 against the app's #0A0908 — two values
+     apart out of 255 — so it sits flush with no mask or rounding */
+}
+.brandline .word{
+  font-family:"Superclarendon","Charter","Iowan Old Style",Georgia,serif;
+  font-optical-sizing:auto;
+  font-size:16px; font-weight:600; letter-spacing:-.006em;
+  color:var(--ember); line-height:1;
+  transform:translateY(-.5px);   /* optically centre it against the mark */
+}
+
+h1{margin:2px 0 2px}
 .sectionhead{display:flex; align-items:baseline; justify-content:space-between;
              gap:10px; margin:26px 0 8px; padding:0 4px}
 .sectionhead a{color:var(--blue); cursor:pointer; font-size:14px; font-weight:500}
@@ -1794,7 +1818,7 @@ function viewToday(d){
   var dlabel = isToday ? "Today"
     : new Date(d+"T12:00").toLocaleDateString(undefined,{weekday:"long",day:"numeric",month:"long"});
 
-  var h = '<h1 class="t-large">'+dlabel+'</h1>'+
+  var h = brandLine() + '<h1 class="t-large">'+dlabel+'</h1>'+
     '<div class="datebar">'+
       '<button class="nav ctl" data-press onclick="goDay(-1)" aria-label="Previous day">‹</button>'+
       '<input type="date" value="'+d+'" max="'+today+'" onchange="setDate(this.value)">'+
@@ -1911,6 +1935,18 @@ function viewToday(d){
     '<div style="height:20px"></div>';
   return h;
 }
+/* The mark is the app icon already sitting in <head> as a data URI, read
+   back off the <link> rather than embedded a second time — so it costs no
+   extra bytes, and swapping the icon updates this too. */
+function brandLine(){
+  var lnk = document.querySelector('link[rel="apple-touch-icon"], link[rel="icon"]');
+  var src = lnk && lnk.getAttribute("href");
+  return '<div class="brandline">'+
+    (src ? '<img class="mark" src="'+src+'" alt="" aria-hidden="true">' : '')+
+    '<span class="word">Hiillos</span>'+
+  '</div>';
+}
+
 function macroBar(name, m, color){
   return '<div class="macro"><span class="nm">'+name+'</span>'+
     '<div class="bar"><i class="js-bar" data-m="'+m+'" style="background:'+color+'"></i></div>'+
@@ -2001,7 +2037,7 @@ function viewFootball(){
   var r = footballCalc(fb, P, w, cur);
   var mids = zoneMidpoints(zoneBasis(P));
 
-  var h = '<h1 class="t-large">Football</h1>'+
+  var h = brandLine() + '<h1 class="t-large">Football</h1>'+
     '<p class="t-sub" style="color:var(--label2);margin:0 0 12px">'+
     (cur===today?"Today":new Date(cur+"T12:00").toLocaleDateString(undefined,{day:"numeric",month:"long"}))+'</p>';
 
@@ -2118,7 +2154,7 @@ function positionSeg(animate){
    FOODS / TRENDS / SETUP
    ================================================================= */
 function viewFoods(){
-  return '<h1 class="t-large">Foods</h1>'+
+  return brandLine() + '<h1 class="t-large">Foods</h1>'+
     '<p class="t-sub" style="color:var(--label2);margin:0 0 12px">Your regulars. Tap one to add it to '+
       (cur===today?"today":"the selected day")+'.</p>'+
     '<div class="card"><div style="padding:12px">'+
@@ -2198,7 +2234,7 @@ function keepRecent(i){
 }
 
 function viewTrends(){
-  var P=S.profile, arr=sortedWeights(), h='<h1 class="t-large">Trend</h1>';
+  var P=S.profile, arr=sortedWeights(), h=brandLine()+'<h1 class="t-large">Trend</h1>';
   var wr = weeklyRate(), w = latestWeight();
   if(arr.length < 2){
     h += '<div class="card"><div class="empty">Log your morning weight for about a week.<br>'+
@@ -2647,7 +2683,7 @@ function ledger(){
 
 function viewSetup(){
   var P=S.profile;
-  return '<h1 class="t-large">Setup</h1>'+
+  return brandLine() + '<h1 class="t-large">Setup</h1>'+
   '<h2 class="t-section" style="margin:22px 0 8px 4px">You</h2><div class="card">'+
     numRow("Age","", P.age, "setP('age',this.value)", "1", "")+
     numRow("Height","", P.height, "setP('height',this.value)", "1", "cm")+
