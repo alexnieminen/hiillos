@@ -312,22 +312,26 @@ var Store = {
   save: function(d){ if(!this.ok) return false; try{ localStorage.setItem(KEY, JSON.stringify(d)); return true; }catch(e){ return false; } }
 };
 
-var SCHEMA = 6;
+var SCHEMA = 7;
 var TKEY = "hiillos_gh_token";   // token lives OUTSIDE S so exports can't leak it
 
 var DEFAULT_PROFILE = {
-  age:18, height:187, sex:"m",
+  /* These are placeholders, deliberately. Set them in Setup on first run —
+     or, if you have GitHub sync configured, a fresh device pulls your real
+     profile down and overwrites all of them. Nothing personal is baked into
+     this file. */
+  age:30, height:175, sex:"m",
 
   /* BMR is DERIVED from your current weight, not stored flat. A fixed number
-     silently overestimates as you lose: Mifflin-St Jeor gives 1999 at 91.5 kg
-     but 1924 at 84 kg, so a hardcoded 2000 would be crediting you ~75 kcal/day
-     of fiction by the end of this cut. "katch" uses Katch-McArdle off lean
-     mass, which is the better formula once you have a real body-comp reading
-     — on your 74.6 kg fat-free mass it returns 1981, which is exactly what
-     your scale reports. */
+     silently overestimates as you lose. For a 180 cm 25-year-old, Mifflin-St
+     Jeor gives 1905 at 90 kg but 1805 at 80 kg, so a value hardcoded at the
+     start would credit ~100 kcal/day of fiction by the end of a 10 kg cut. "katch"
+     uses Katch-McArdle off lean mass, which is the better formula once you
+     have a real body-composition reading, and on a bioimpedance scale's own
+     fat-free figure the two usually land within about 20 kcal of each other. */
   bmrMode:"mifflin",  // "mifflin" | "katch" | "manual"
-  bmrManual:2000,
-  leanMass:74.6,      // fat-free mass in kg, from the scale
+  bmrManual:1800,
+  leanMass:0,         // fat-free mass in kg, from a scale — 0 = not known
 
   wakingHours:16,     // hours awake; the rest of the 24 h is covered by BMR
 
@@ -338,11 +342,11 @@ var DEFAULT_PROFILE = {
          net kcal/step = stride(m) × weight(kg) / 2000
 
      Cadence cancels out completely, which is why it is no longer an input at
-     all. At a 0.776 m stride and 91.5 kg that gives 0.0355 kcal/step, or
+     all. At a 0.75 m stride and 90 kg that gives 0.0338 kcal/step, or
      0.50 kcal/kg/km — exactly where the walking-economy literature lands.
-     The old 3.9-MET route gave 0.0422, about 27% high, because Compendium
-     METs are gross and assume a 3.5 ml/kg/min resting rate that an 18-year-old
-     carrying 91 kg does not actually have. */
+     A 3.9-MET route would give 0.0422, about 19% high, because Compendium
+     METs are gross and assume a 3.5 ml/kg/min resting rate that a heavier
+     young adult does not actually have. */
   strideCm:0,         // 0 = derive from height (0.415 × height)
   walkFactor:1.00,    // walking-economy multiplier, if you ever need to tune it
 
@@ -365,17 +369,37 @@ var DEFAULT_PROFILE = {
 
   gymMins:60,         // so gym minutes leave the "everything else" pool
   gymKcal:300,
-  restHR:60, maxHR:202, vo2max:45,
-  margin:10,
+  restHR:60,
+  /* TWO max-heart-rate figures, because they are used for two different jobs
+     and the right answer differs.
 
-  /* TEF is macro-additive now, with no flat rate anywhere: protein costs 25%
-     of its own energy to process, carbs 7.5%, fat 2.5% — the midpoints of the
-     measured 20-30 / 5-10 / 0-3% bands. At 185 g protein your real TEF is
-     around 14% of intake, not the 12% the old flat rate assumed. */
-  proteinTarget:185,
+     maxHR is your PHYSIOLOGICAL maximum, used to turn a heart rate into a
+     fraction of heart-rate reserve. Tanaka (208 − 0.7 × age) is a better
+     estimator than the old 220 − age, which overshoots for the young.
 
-  deficit:800,        // fallback only — the plan below normally decides
-  goalWeight:84, goalBF:12,
+     zoneBasisHR is whatever figure your WATCH used when it decided which zone
+     a minute belonged to — Fitbit uses 220 − age. Zone minutes have to be
+     priced against that, not against your real maximum, or the app charges a
+     "Cardio" minute at a heart rate the watch never used to bucket it. Getting
+     this wrong shifted a two-hour zone-logged game by about 65 kcal. */
+  maxHR:190,          // physiological, for %HRR  (Tanaka at 26)
+  zoneBasisHR:0,      // 0 = derive 220 − age, which is what Fitbit uses
+  vo2max:45,
+  /* Deliberate under-estimate on the football figure. The Keytel regression
+     is known to overestimate in intermittent team sport, and wrist optical
+     sensors are least accurate in exactly that setting — heart rate drifts
+     upward under thermal and emotional load without oxygen uptake following.
+     While cutting, under-crediting is the safer error. */
+  margin:12,
+
+  /* TEF is macro-additive, with no flat rate anywhere: protein 25% of its own
+     energy, carbs 7.5%, fat 2.5% — the midpoints of the measured 20-30 /
+     5-10 / 0-3% bands. On a high-protein cut the real figure lands nearer 14%
+     of intake than the textbook 10-12%. */
+  proteinTarget:150,
+
+  deficit:500,        // fallback only — the plan below normally decides
+  goalWeight:75, goalBF:15,
   rateTol:0.35,       // ±35% around the rate your deficit implies = "on target"
   calibrate:0,        // apply the measured-TDEE correction
 
@@ -389,11 +413,14 @@ var DEFAULT_PROFILE = {
    days you had actually hit target exactly. Bands are tested top-down. */
 var DEFAULT_PLAN = {
   mode:"auto",              // "auto" = the bands decide | "manual" = profile.deficit
+  /* Placeholder phases. Edit them in Setup, or let a synced device replace
+     them. The shape is the point: a bigger deficit while there is more fat to
+     lose, tapering as you approach goal. */
   bands:[
-    {above:90, deficit:800, label:"91.5 \u2192 90"},
-    {above:88, deficit:600, label:"90 \u2192 88"},
-    {above:86, deficit:500, label:"88 \u2192 86"},
-    {above:0,  deficit:400, label:"86 \u2192 84"}
+    {above:85, deficit:700, label:"above 85"},
+    {above:80, deficit:600, label:"85 \u2192 80"},
+    {above:75, deficit:500, label:"80 \u2192 75"},
+    {above:0,  deficit:400, label:"below 75"}
   ],
   windows:[]                // [{from,to,deficit,label}] — exams, illness, holidays
 };
@@ -401,8 +428,8 @@ var DEFAULT_PLAN = {
 /* Thermic effect per gram = Atwater energy × the thermic fraction of each
    macro (protein 25%, carbs 7.5%, fat 2.5% — the midpoints of the measured
    20-30 / 5-10 / 0-3% ranges). Protein costs about a quarter of its own energy
-   just to be processed, which is why a 185 g cut runs a noticeably higher TEF
-   than the textbook flat 10%. */
+   just to be processed, which is why a high-protein cut runs a noticeably
+   higher TEF than the textbook flat 10%. */
 var TEF_P = 1.000, TEF_C = 0.300, TEF_F = 0.225;
 function tefOf(e){ return (e.p||0)*TEF_P + (e.c||0)*TEF_C + (e.f||0)*TEF_F; }
 
@@ -429,14 +456,14 @@ function plannedTefRate(kcal){
    every time you stepped on the scale. */
 function weightAt(d){
   var arr = sortedWeights();
-  if(!arr.length) return 91.55;
+  if(!arr.length) return 80;
   var best = null;
   for(var i=0;i<arr.length;i++){ if(arr[i].d <= d) best = arr[i]; else break; }
   return best ? best.w : arr[0].w;
 }
 function latestWeight(){
   var arr = sortedWeights();
-  return arr.length ? arr[arr.length-1].w : 91.55;
+  return arr.length ? arr[arr.length-1].w : 80;
 }
 
 /* Mifflin-St Jeor, evaluated at that day's weight so it tracks you down.
@@ -447,18 +474,18 @@ function bmrAt(d){
   if(P.bmrMode === "manual") return Math.max(0, +P.bmrManual || 0);
   if(P.bmrMode === "katch" && +P.leanMass > 0) return 370 + 21.6 * (+P.leanMass);
   var s = (P.sex === "f") ? -161 : 5;
-  return 10*w + 6.25*(+P.height||187) - 5*(+P.age||18) + s;
+  return 10*w + 6.25*(+P.height||175) - 5*(+P.age||30) + s;
 }
 
 /* ---------- walking ---------- */
 
 /* Step length. Walking step length runs about 0.415 × standing height for
-   men, which at 187 cm is 0.776 m. Override it in Setup if you've ever
-   actually measured yours over a known distance. */
+   men, so 0.75 m at 180 cm. Override it in Setup if you've ever actually
+   measured yours over a known distance. */
 function strideM(P){
   var cm = +P.strideCm;
   if(cm > 20) return cm/100;
-  return 0.415 * (+P.height||187) / 100;
+  return 0.415 * (+P.height||175) / 100;
 }
 
 /* Net kcal per step, straight from the ACSM level-walking equation. Note that
@@ -655,7 +682,7 @@ if(!(S.schema >= 6)){
      hand-tuned it away from Mifflin, that intent is kept as a manual override
      instead of being thrown away. */
   if(S.profile.bmrMode === undefined){
-    var _mif = 10*91.55 + 6.25*(+S.profile.height||187) - 5*(+S.profile.age||18) + 5;
+    var _mif = 10*latestWeight() + 6.25*(+S.profile.height||175) - 5*(+S.profile.age||30) + 5;
     var _had = _savedProfile ? +_savedProfile.bmr : 0;
     var _tuned = _had > 0 && Math.abs(_had - _mif) > 60;
     S.profile.bmrMode   = _tuned ? "manual" : "mifflin";
@@ -687,7 +714,37 @@ if(!(S.schema >= 6)){
     .forEach(function(k){ delete S.profile[k]; });
   Object.keys(S.days).forEach(function(k){ delete S.days[k].tone; });   // the Quiet/Busy tag
 
+  /* Stamp a profile version. Without one, the first file pushed to GitHub has
+     no `pm`, so a second device comparing `0 > 0` would decline to pull your
+     settings and sit on the stock defaults forever. */
+  if(S.pm === undefined) S.pm = Date.now();
+
   S.schema = 6;
+}
+if(!(S.schema >= 7)){
+  /* Zone minutes were being priced against whatever single max-HR figure was
+     in the profile. Whatever that was, it is also what the watch was using
+     when it bucketed them, so carry it across as the zone basis before the
+     physiological figure moves. */
+  /* Test _savedProfile, not S.profile: the defaults are merged in above, so by
+     the time a migration runs the field already holds its default and can
+     never look "missing". This is the same trap the v2 migration documents. */
+  if(!_savedProfile || _savedProfile.zoneBasisHR === undefined)
+    S.profile.zoneBasisHR = +S.profile.maxHR || 0;
+
+  /* 220 − age overshoots for the young. If max HR is still sitting on that
+     naive formula rather than something observed, move it to Tanaka. */
+  var _age   = +S.profile.age || 30;
+  var _naive = 220 - _age;
+  if(Math.abs((+S.profile.maxHR || 0) - _naive) < 1)
+    S.profile.maxHR = Math.round(208 - 0.7*_age);
+
+  /* The football margin goes to 12%. Keytel overestimates in intermittent
+     team sport and wrist sensors are least reliable there, so 10 was a little
+     thin. Only moved if it was still on the old default. */
+  if(+S.profile.margin === 10) S.profile.margin = 12;
+
+  S.schema = 7;
 }
 Store.save(S);
 }
@@ -760,6 +817,19 @@ function planWindowFor(d){
   }
   return null;
 }
+/* A band's name is a FUNCTION of its thresholds, not a stored string. Storing
+   both meant an edited threshold left a label describing the old one — and the
+   label is what the plan card, the forecast and the Today card all show, so
+   the app would confidently mislabel the phase it was actually applying. */
+function bandLabel(i){
+  var bs = (S.plan && S.plan.bands) || [];
+  var b = bs[i]; if(!b) return "";
+  var lo = +b.above || 0;
+  var hi = i > 0 ? (+bs[i-1].above || 0) : 0;
+  if(i === 0)            return "above " + n1(lo);
+  if(lo <= 0)            return "below " + n1(hi);
+  return n1(hi) + " \u2192 " + n1(lo);
+}
 function planBandFor(w){
   var bs = (S.plan && S.plan.bands) || [];
   for(var i=0;i<bs.length;i++) if(w > (+bs[i].above||0)) return bs[i];
@@ -822,7 +892,7 @@ function footballCalc(fb, P, w, d){
   var kSum=0, hSum=0, gSum=0, totMin=0, detail=[];
 
   if(fb.mode === "zones"){
-    var mids = zoneMidpoints(P.maxHR);
+    var mids = zoneMidpoints(zoneBasis(P));
     ["light","fat","cardio","peak"].forEach(function(z,i){
       var m = +fb.z[z] || 0;
       if(m<=0) return;
@@ -856,6 +926,13 @@ function footballCalc(fb, P, w, d){
   return { mins:mins, gross:gSum, keytel:kSum, hrr:hSum, bmrPart:bmrPart,
     net:net, margin:margin, final:final, stepsDup:0,
     credited: final, spread:spread, perMin: final/mins, detail:detail };
+}
+/* Which max-HR figure a zone was drawn against. Fitbit uses 220 − age, so
+   that is what its zone boundaries mean — pricing those minutes against a
+   lower physiological maximum would charge a "Cardio" minute at a heart rate
+   the watch never used to put it there. */
+function zoneBasis(P){
+  return Math.max(120, (+P.zoneBasisHR) || (220 - (+P.age || 30)));
 }
 function zoneMidpoints(max){
   return [ Math.round(max*0.44), Math.round(max*0.595), Math.round(max*0.77), Math.round(max*0.92) ];
@@ -1470,8 +1547,9 @@ function deficitWhy(d){
   var win = planWindowFor(d);
   if(win) return "Maintenance window" + (win.label ? " ("+esc(win.label)+")" : "") + ".";
   if(!S.plan || S.plan.mode !== "auto") return "Set by hand in Setup.";
-  var b = planBandFor(trendWeightAt(d));
-  return b ? ("Plan phase "+b.label+", from a trend weight of "+n1(trendWeightAt(d))+" kg.")
+  var tw = trendWeightAt(d), b = planBandFor(tw);
+  var idx = (S.plan.bands||[]).indexOf(b);
+  return b ? ("Plan phase "+bandLabel(idx)+", from a trend weight of "+n1(tw)+" kg.")
            : "From your plan.";
 }
 function bmrBasis(d){
@@ -1693,7 +1771,7 @@ function viewFootball(){
   if(!fb.z) fb.z={light:0,fat:0,cardio:0,peak:0};
   fbMode = fb.mode || "avg";
   var r = footballCalc(fb, P, w, cur);
-  var mids = zoneMidpoints(P.maxHR);
+  var mids = zoneMidpoints(zoneBasis(P));
 
   var h = '<h1 class="t-large">Football</h1>'+
     '<p class="t-sub" style="color:var(--label2);margin:0 0 12px">'+
@@ -1714,6 +1792,9 @@ function viewFootball(){
         '<span class="val big t-body">'+Math.round(zt)+'</span><span class="val t-body">min</span></div>'+
       '<div class="note" style="border-bottom:.5px solid var(--sep)">Minutes in each Fitbit zone. '+
         'This handles stop-start football far better than one average.</div>'+
+      '<div class="note" style="border-bottom:.5px solid var(--sep);color:var(--label3)">'+
+        'Midpoints from a '+zoneBasis(P)+' bpm zone basis, which is what your watch '+
+        'used to sort these minutes.</div>'+
       numRow("Below zones","~"+mids[0]+" bpm", fb.z.light||0, "setZ('light',this.value)", "1", "min")+
       numRow("Fat Burn","~"+mids[1]+" bpm", fb.z.fat||0, "setZ('fat',this.value)", "1", "min")+
       numRow("Cardio","~"+mids[2]+" bpm", fb.z.cardio||0, "setZ('cardio',this.value)", "1", "min")+
@@ -1727,13 +1808,18 @@ function viewFootball(){
 
   h += '<h2 class="t-section" style="margin:26px 0 8px 4px">Your presets</h2><div class="card">'+
     presetRow("Chill with friends","2 h · avg 110 bpm",120,110)+
-    presetRow("Sunday with the grandpas","2 h · avg 150 bpm",120,150)+
+    presetRow("Hard game","2 h · avg 150 bpm",120,150)+
     presetRow("Normal game","90 min · avg 140 bpm",90,140)+
   '</div>';
 
   h += '<h2 class="t-section" style="margin:26px 0 8px 4px">Heart rate settings</h2><div class="card">'+
     numRow("Resting HR","Fitbit shows this on the heart tab", P.restHR, "setP('restHR',this.value)", "1", "bpm")+
-    numRow("Max HR","220 − age; raise it if you've seen higher", P.maxHR, "setP('maxHR',this.value)", "1", "bpm")+
+    numRow("Max HR","for %HRR \u00b7 Tanaka (208 \u2212 0.7 \u00d7 age) = "+
+      Math.round(208-0.7*(+P.age||30))+" \u00b7 raise it if you've genuinely seen higher",
+      P.maxHR, "setP('maxHR',this.value)", "1", "bpm")+
+    numRow("Zone basis HR","what your watch used to draw its zones \u00b7 Fitbit uses 220 \u2212 age = "+
+      (220-(+P.age||30))+" \u00b7 0 to follow that automatically",
+      P.zoneBasisHR, "setP('zoneBasisHR',this.value)", "1", "bpm")+
     numRow("VO₂max","Fitbit calls this Cardio Fitness Score", P.vo2max, "setP('vo2max',this.value)", "1", "")+
     numRow("Safety margin","deliberate under-estimate", P.margin, "setP('margin',this.value)", "1", "%")+
   '</div><div style="height:20px"></div>';
@@ -2048,7 +2134,7 @@ function adviceCard(wr, P){
       Math.abs(adj)+" kcal/day.";
   } else {
     msg = "You're losing faster than this phase intends. On a "+Math.round(tr.deficit)+
-      " deficit at 18 that's worth correcting, "+
+      " deficit that's worth correcting, "+
       "not celebrating — fast loss above about 1 kg/week starts costing lean mass and recovery. Add roughly "+
       Math.abs(adj)+" kcal/day, mostly carbs around football.";
   }
@@ -2087,8 +2173,8 @@ function planForecast(){
     var days = Math.round(drop / rate * 7);
     var pause = pauseDaysBetween(d, shift(d, days));
     var end = shift(d, days + pause);
-    out.push({label:band.label, deficit:+band.deficit, rate:rate, from:w, to:floor,
-              weeks:drop/rate, pause:pause, start:d, end:end});
+    out.push({label:bandLabel((S.plan.bands||[]).indexOf(band)), deficit:+band.deficit,
+              rate:rate, from:w, to:floor, weeks:drop/rate, pause:pause, start:d, end:end});
     w = floor; d = end;
   }
   return out;
@@ -2120,7 +2206,8 @@ function planSection(){
       'not a lapse \u2014 nothing here counts it as one.</div></div>';
   } else if(cur_b){
     h += '<div style="padding:14px 16px">'+
-      '<div class="t-head" style="margin-bottom:4px">Phase '+esc(cur_b.label)+'</div>'+
+      '<div class="t-head" style="margin-bottom:4px">Phase '+
+      esc(bandLabel((S.plan.bands||[]).indexOf(cur_b)))+'</div>'+
       '<div class="t-sub" style="color:var(--label2);line-height:1.5">'+
       'Deficit <b>'+Math.round(cur_b.deficit)+'</b> \u2192 about <b>'+n1(cur_b.deficit*7/7700)+
       ' kg/week</b>. Trend weight '+n1(tw)+' kg.</div></div>';
@@ -2315,7 +2402,7 @@ function viewSetup(){
     numRow("Hours awake","the rest of the day is covered by BMR", P.wakingHours,
       "setP('wakingHours',this.value)", "0.5", "h")+
     numRow("Step length","0 = derive from height (0.415 \u00d7 "+P.height+" cm = "+
-      n1(0.415*(+P.height||187))+" cm) \u2192 \u2248"+
+      n1(0.415*(+P.height||175))+" cm) \u2192 \u2248"+
       (Math.round(perStepKcal(P, latestWeight())*10000)/10000)+" kcal/step at "+
       n1(latestWeight())+" kg",
       P.strideCm, "setP('strideCm',this.value)", "1", "cm")+
@@ -2325,22 +2412,39 @@ function viewSetup(){
       n1(P.compFactor*100), "setP('compFactor',this.value/100)", "5", "%")+
     numRow("Everything else awake","at your habitual step level \u00b7 1.2 desk-bound, 1.25 school day, 1.4 on your feet",
       P.metIdle, "setP('metIdle',this.value)", "0.05", "MET")+
-    numRow("Your habitual steps",
+    /* TWO step numbers, and the difference confuses people, so label it
+       plainly. The 28-day median is measured and needs no maintenance. This
+       field is a one-off anchor: the step level at which the MET figure above
+       was true. The slope earns its keep from the gap between them, which is
+       exactly why this must NOT auto-track the median — if it did, the gap
+       would always be zero and the slope would never do anything. */
+    '<div class="kv" style="display:block">'+
+      '<div style="display:flex;justify-content:space-between;gap:12px">'+
+        '<span>Measured habitual steps</span>'+
+        '<span>'+Math.round(habitualSteps()).toLocaleString()+'</span></div>'+
+      '<div class="t-cap" style="color:var(--label3);margin-top:2px">'+
+        '28-day median of the days you recorded. Updates itself every day \u2014 '+
+        'nothing to set. Steps above this are the ones credited at '+
+        Math.round(Math.max(0.3,Math.min(1,pnum(P.compFactor,1)))*100)+'%.'+
+      '</div></div>'+
+    numRow("Typical-day anchor",
       (function(){
         var h = Math.round(habitualSteps()), ref = Math.round(+P.stepsRef||0);
-        var t = "measured at "+h.toLocaleString()+" over the last 28 days";
-        /* If these two disagree, neatSlope quietly shifts your idle intensity
-           away from the metIdle you actually set — so say so out loud with the
-           size of the effect, rather than leaving it to be discovered. */
+        var t = "the step level the MET figure above was set at. A one-off \u2014 "+
+                "leave it alone once it\u2019s right";
+        /* If these two disagree, neatSlope quietly shifts idle intensity away
+           from the metIdle actually set — so say so out loud, with the size of
+           the effect, rather than leaving it to be discovered. */
         if(Math.abs(h - ref) >= 500)
-          t += " \u2014 <b>this says "+ref.toLocaleString()+"</b>, so idle sits at "+
-               n2(idleMet(P))+" MET rather than the "+n2(+P.metIdle||1.25)+
+          t += ". <b>Your measured habit is "+h.toLocaleString()+"</b>, so idle is running at "+
+               n2(idleMet(P))+" MET rather than the "+n2(pnum(P.metIdle,1.25))+
                " above. <a onclick=\'setP(&quot;stepsRef&quot;,"+h+")\' "+
                "style=\'color:var(--blue);cursor:pointer\'>Use "+h.toLocaleString()+"</a>";
         return t;
       })(),
       P.stepsRef, "setP('stepsRef',this.value)", "250", "")+
-    numRow("A busier life lifts it by","per 1000 HABITUAL steps above the figure above \u00b7 0 to pin it",
+    numRow("A busier life lifts it by",
+      "per 1000 steps of measured habit above the anchor \u00b7 0 to pin idle intensity",
       P.neatSlope, "setP('neatSlope',this.value)", "0.002", "MET")+
     numRow("Gym session","flat add", P.gymKcal, "setP('gymKcal',this.value)", "10", "kcal")+
     numRow("Gym duration","so those minutes leave the awake pool", P.gymMins,
@@ -2431,14 +2535,38 @@ function planEditor(){
   } else {
     h += '<div class="note" style="border-bottom:.5px solid var(--sep)">Each band applies while '+
       'your <b>trend weight</b> (7-day average) is above its threshold. Tested top-down.</div>';
+    /* Two deliberate lines per band rather than one row that wraps: at 375 px
+       a label plus two labelled inputs cannot fit side by side, and letting it
+       wrap on its own put the deficit box on a ragged second line. */
     pl.bands.forEach(function(b,i){
-      h += '<div class="row"><div class="grow"><div class="ttl t-body">'+esc(b.label||("Band "+(i+1)))+'</div>'+
-        '<div class="sub2 t-foot">above '+n1(b.above)+' kg \u2192 \u2248'+n1(b.deficit*7/7700)+
-        ' kg/wk</div></div>'+
-        '<input type="number" inputmode="numeric" step="25" value="'+(+b.deficit||0)+'" '+
-          'onchange="setBand('+i+',this.value)">'+
-        '<span class="val t-body" style="flex:0 0 auto">kcal</span></div>';
+      var last = i === pl.bands.length - 1;
+      h += '<div class="kv" style="display:block">'+
+        '<div style="display:flex;justify-content:space-between;gap:10px;align-items:baseline">'+
+          '<span class="t-body" style="font-weight:600">'+esc(bandLabel(i))+'</span>'+
+          '<span class="t-foot" style="color:var(--label2)">\u2248'+
+            n1(b.deficit*7/7700)+' kg/wk</span>'+
+        '</div>'+
+        '<div style="display:flex;gap:8px;align-items:center;margin-top:8px">'+
+          '<label style="display:flex;gap:5px;align-items:center;flex:1;min-width:0">'+
+            '<span class="t-cap" style="color:var(--label3);flex:0 0 auto">from</span>'+
+            (last
+              ? '<span class="val t-body" style="flex:1;text-align:right;padding-right:4px">'+
+                'anything below</span>'
+              : '<input type="number" inputmode="decimal" step="0.5" style="max-width:100%" '+
+                'value="'+n1(+b.above||0)+'" onchange="setBandAbove('+i+',this.value)">'+
+                '<span class="t-cap" style="color:var(--label3);flex:0 0 auto">kg</span>')+
+          '</label>'+
+          '<label style="display:flex;gap:5px;align-items:center;flex:1;min-width:0">'+
+            '<span class="t-cap" style="color:var(--label3);flex:0 0 auto">eat</span>'+
+            '<input type="number" inputmode="numeric" step="25" style="max-width:100%" '+
+              'value="'+(+b.deficit||0)+'" onchange="setBand('+i+',this.value)">'+
+            '<span class="t-cap" style="color:var(--label3);flex:0 0 auto">less</span>'+
+          '</label>'+
+        '</div></div>';
     });
+    h += '<div class="note" style="border-top:.5px solid var(--sep)">The last band is the '+
+      'floor \u2014 it applies below the one above it, so it has no threshold of its own. '+
+      'Thresholds re-sort themselves if you put them out of order.</div>';
   }
   h += '</div>';
 
@@ -2468,6 +2596,19 @@ function setBand(i,v){
   var n = parseFloat(String(v).replace(",","."));
   if(!isNaN(n) && n >= 0 && S.plan.bands[i]) S.plan.bands[i].deficit = n;
   S.pm = Date.now(); save(); render(); toast("Band updated");
+}
+/* Thresholds are tested top-down by planBandFor, so they have to stay in
+   descending order. Re-sort rather than refuse: a half-finished edit would
+   otherwise silently apply the wrong phase. */
+function setBandAbove(i,v){
+  var n = parseFloat(String(v).replace(",","."));
+  if(isNaN(n) || n < 0 || !S.plan.bands[i]) return;
+  S.plan.bands[i].above = n;
+  var lastB = S.plan.bands[S.plan.bands.length-1];
+  lastB.above = 0;                                  // the floor stays the floor
+  S.plan.bands.sort(function(a,b){ return (+b.above||0) - (+a.above||0); });
+  S.plan.bands.forEach(function(b,j){ b.label = bandLabel(j); });
+  S.pm = Date.now(); save(); render(); toast("Threshold updated");
 }
 function addWindow(){
   var a = el("winFrom") && el("winFrom").value, b = el("winTo") && el("winTo").value;
@@ -2735,16 +2876,23 @@ function mergeRemote(inc){
   if(!inc || typeof inc !== "object") return {changed:false};
   var changed = false, pulled = {days:0, weights:0, waist:0, foods:0}, prof = false;
 
-  /* Profile and plan move as one unit, by whichever side was edited last.
-     Merging them field-by-field would let two devices produce a settings
+  /* A device with nothing logged on it isn't merging, it's restoring — so it
+     takes the remote settings outright rather than comparing versions. Without
+     this a newly set-up phone pulled all your days and weigh-ins but kept the
+     stock profile, quietly running your cut on someone else's numbers. */
+  var localLogged = Object.keys(S.days).filter(function(k){ return dayHasContent(S.days[k]); }).length;
+  var fresh = localLogged === 0;
+
+  /* Otherwise profile and plan move as one unit, by whichever side was edited
+     last. Merging them field-by-field would let two devices produce a settings
      combination that never existed on either. */
-  if(inc.profile && (+inc.pm||0) > (+S.pm||0)){
+  if(inc.profile && (fresh || (+inc.pm||0) > (+S.pm||0))){
     Object.keys(DEFAULT_PROFILE).forEach(function(k){
       if(k === "ghRepo" || k === "ghPath" || k === "ghAuto") return;   // per-device
       if(inc.profile[k] !== undefined) S.profile[k] = inc.profile[k];
     });
     if(inc.plan) S.plan = inc.plan;
-    S.pm = +inc.pm;
+    S.pm = (+inc.pm) || Date.now();
     prof = true; changed = true;
   }
 
