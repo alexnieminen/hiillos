@@ -413,7 +413,7 @@ var Store = {
   save: function(d){ if(!this.ok) return false; try{ localStorage.setItem(KEY, JSON.stringify(d)); return true; }catch(e){ return false; } }
 };
 
-var SCHEMA = 8;
+var SCHEMA = 9;
 var TKEY = "hiillos_gh_token";   // token lives OUTSIDE S so exports can't leak it
 
 var DEFAULT_PROFILE = {
@@ -480,26 +480,34 @@ var DEFAULT_PROFILE = {
      case. 1.0 turns this off entirely. */
   compFactor:0.75,
 
-  /* GYM is priced per minute, not as a lump sum. A flat figure cannot tell a
-     45-minute session from a 90-minute one, which is most of the variation
-     there actually is.
+  /* GYM is a FLAT figure, and that is the considered choice rather than the
+     lazy one. Scaling by duration looks more precise and is worse here: the
+     set count is what is constant, and the minutes vary because a session
+     runs long when there is someone to talk to. Charging that by the minute
+     prices standing around as work.
 
-     4.4 net kcal/min is built from three things that agree:
-       - measured sessions: a watch reporting 353-428 kcal gross over 61-69
-         min is 5.1-7.0 gross kcal/min, i.e. ~4.7 net once the resting rate
-         BMR already covers is taken out
-       - the resistance-training literature heuristic of ~6 gross kcal/min
-         including rest intervals, which lands in the same place
-       - the Compendium: ~3.9 gross METs, which is "resistance training,
-         moderate effort" — the right bracket for a session averaging around
-         107 bpm with long rests between sets
+     Three sessions of 61/67/69 min make the point. Described as a flat total
+     they vary by 14%; described as a rate per minute they vary by 20%, and the
+     rate falls steadily as the session lengthens — 5.63, 4.70, 3.73 net
+     kcal/min. That declining rate IS the lingering.
 
-     It then carries a ~7% EPOC allowance (the measured central estimate for
-     the afterburn, not the marketing one) and is trimmed slightly because the
-     steps you take walking between machines are already being credited by the
-     walking term. NET of BMR, because BMR here covers all 1440 minutes. */
-  gymMins:60,         // default session length; each day can override it
-  gymRate:4.4,        // net kcal per minute
+     255 is built from those measurements:
+       305  measured net above BMR, averaged over the three
+       -27  the idle rate now charged underneath (see neatParts: gym minutes
+            stay in the ordinary awake pool, since standing between sets is
+            genuinely idle-NEAT-like)
+       +19  a 7% afterburn — the measured central estimate for EPOC after
+            resistance work, not the marketing one
+       -43  ~1200 steps between machines, already paid for by the walking term
+       ---
+       255  net kcal
+
+     A longer session therefore still costs slightly more, because those extra
+     minutes are awake-and-mildly-active rather than excluded — about 8 kcal
+     for twenty minutes of chatting. Which is roughly what chatting is worth,
+     and it needs nothing typed in. */
+  gymKcal:255,        // flat, net of BMR
+
   restHR:60,
   /* TWO max-heart-rate figures, because they are used for two different jobs
      and the right answer differs.
@@ -677,7 +685,12 @@ function neatParts(d){
   /* Minutes: derived from distance and an assumed walking speed purely so the
      idle pool shrinks by a sensible amount. It no longer touches the energy. */
   var stepMin  = walkSteps * strideM(P) / 80;      // ~80 m/min, a normal pace
-  var trainMin = (fb ? fb.mins : 0) + (x.gym ? gymMinsFor(d) : 0);
+  /* Only football removes its minutes: its heart-rate figure genuinely
+     replaces them. Gym minutes stay in the pool, because a gym session is
+     mostly standing about, and the flat figure above is net of exactly this
+     idle rate — so a session that runs long picks up a little extra on its
+     own, with nothing to type in. */
+  var trainMin = fb ? fb.mins : 0;
   var idleMin  = Math.max(0, wakingMin - stepMin - trainMin);
   var mi       = idleMet(P);
   var per      = perStepKcal(P, w);
@@ -904,6 +917,29 @@ if(!(S.schema >= 8)){
   S.pm = Date.now();
   S.schema = 8;
 }
+if(!(S.schema >= 9)){
+  /* ---- v9: back to a flat gym figure, at the corrected value -------------
+     v8 replaced the flat number with a per-minute rate, on the reasoning that
+     a rate can tell a 45-minute session from a 90-minute one. For this user it
+     is the wrong reasoning: the SET COUNT is what is constant, and the minutes
+     vary because a session runs long when there is someone to talk to. A rate
+     charges that conversation as work.
+
+     The measurements say so too. Across sessions of 61/67/69 minutes the flat
+     total varies by 14% and the per-minute rate by 20% — and the rate falls
+     steadily as the session lengthens, which is the lingering showing up. The
+     flat total is simply the better description of these sessions.
+
+     255 rather than the original 350: that figure was a gross session estimate
+     plus a ~17% afterburn, and both halves were generous. See the note on
+     gymKcal in DEFAULT_PROFILE for the full derivation. */
+  if(S.profile.gymKcal === undefined) S.profile.gymKcal = 255;
+  delete S.profile.gymRate;
+  delete S.profile.gymMins;      // gym minutes no longer leave the idle pool
+  Object.keys(S.days).forEach(function(k){ delete S.days[k].gymMins; });
+  S.pm = Date.now();
+  S.schema = 9;
+}
 Store.save(S);
 }
 
@@ -1022,18 +1058,10 @@ function deficitFor(d){
 }
 /* Freeze it. Today stays live (so a band change applies the same day); any
    other day is written once and never touched again. */
-/* Session length for a given day: whatever that day recorded, falling back to
-   your usual. Stored per day so a long Saturday session is not priced as an
-   ordinary weekday one. */
-function gymMinsFor(d){
-  var x = peek(d);
-  if(x && +x.gymMins > 0) return +x.gymMins;
-  return Math.max(0, +S.profile.gymMins || 0);
-}
+/* Flat: the work is the sets, and the sets don't change. */
 function gymKcalFor(d){
   var x = peek(d);
-  if(!x || !x.gym) return 0;
-  return Math.max(0, pnum(S.profile.gymRate, 4.4)) * gymMinsFor(d);
+  return (x && x.gym) ? Math.max(0, pnum(S.profile.gymKcal, 255)) : 0;
 }
 
 function stampDeficit(d){
@@ -1941,12 +1969,8 @@ function viewToday(d){
       x.steps||0, "setDay('steps',this.value)", "1",
       '<span class="js-stepkcal">'+Math.round(b.steps)+'</span>')+
     '<label class="row" data-press><div class="grow"><div class="ttl t-body">Gym</div>'+
-      '<div class="sub2 t-foot">'+(x.gym
-        ? Math.round(gymMinsFor(d))+' min at '+n1(pnum(P.gymRate,4.4))+' net kcal/min'
-        : n1(pnum(P.gymRate,4.4))+' net kcal/min \u00d7 your session length')+'</div></div>'+
-      (x.gym ? '<input type="number" inputmode="numeric" enterkeyhint="done" step="5" '+
-        'value="'+Math.round(gymMinsFor(d))+'" onchange="setDay(\'gymMins\',this.value)" '+
-        'style="max-width:74px"><span class="val t-body" style="flex:0 0 auto">min</span>' : '')+
+      '<div class="sub2 t-foot">flat '+Math.round(pnum(P.gymKcal,255))+
+      ' kcal \u00b7 your set count, not the clock</div></div>'+
       '<input type="checkbox" style="width:20px;height:20px;accent-color:var(--ember)" '+
       (x.gym?"checked":"")+' onchange="setDay(\'gym\',this.checked)"></label>'+
     '<div class="row ctl" data-press onclick="nav(\'football\')" style="cursor:pointer">'+
@@ -2813,14 +2837,12 @@ function viewSetup(){
           "style=\'color:var(--blue);cursor:pointer\'>Set to 0</a>"
         : ""),
       P.neatSlope, "setP('neatSlope',this.value)", "0.002", "MET")+
-    numRow("Gym intensity",
-      "net kcal per minute. 4.4 is a moderate session \u2014 long rests, average "+
-      "heart rate around 110. It is net of the resting rate BMR already covers, "+
-      "carries a ~7% afterburn allowance, and is trimmed a little because the "+
-      "steps you take between machines are already counted as walking",
-      P.gymRate, "setP('gymRate',this.value)", "0.1", "kcal/min")+
-    numRow("Usual gym session","the default length; any day can override it", P.gymMins,
-      "setP('gymMins',this.value)", "5", "min")+
+    numRow("Gym session",
+      "flat, because your set count is what stays constant \u2014 sessions run long "+
+      "when there is company, and that is standing about rather than work. Net of "+
+      "the resting rate, with a 7% afterburn, less the steps between machines that "+
+      "the walking term already pays for",
+      P.gymKcal, "setP('gymKcal',this.value)", "5", "kcal")+
   '</div>'+
   '<div class="card"><div class="note">'+
     '<b>How the day is divided.</b> Non-exercise movement already includes walking, so a flat '+
@@ -3133,8 +3155,8 @@ function copyProfile(){
     Math.round(b.neat)+" at "+n1(b.np.met)+" MET + walking at "+
     (Math.round(b.np.perStep*10000)/10000)+" kcal/step (ACSM, stride \u00d7 kg \u00f7 2000), "+
     "with steps above my habitual "+Math.round(b.np.hab)+" credited at "+
-    Math.round(b.np.comp*100)+"% + gym at "+n1(pnum(P.gymRate,4.4))+" net kcal/min"+
-    " + a heart-rate football estimate, "+
+    Math.round(b.np.comp*100)+"% + a flat "+Math.round(pnum(P.gymKcal,255))+
+    " net for a gym session + a heart-rate football estimate, "+
     "then macro-additive TEF (protein 25%, carbs 7.5%, fat 2.5%).\n\n"+
     "When I send food photos or describe a meal, reply with one line per item and nothing else:\n"+
     "Name | kcal | protein g | carbs g | fat g\n"+
