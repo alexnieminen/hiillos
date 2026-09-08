@@ -413,7 +413,7 @@ var Store = {
   save: function(d){ if(!this.ok) return false; try{ localStorage.setItem(KEY, JSON.stringify(d)); return true; }catch(e){ return false; } }
 };
 
-var SCHEMA = 9;
+var SCHEMA = 10;
 var TKEY = "hiillos_gh_token";   // token lives OUTSIDE S so exports can't leak it
 
 var DEFAULT_PROFILE = {
@@ -432,7 +432,13 @@ var DEFAULT_PROFILE = {
      fat-free figure the two usually land within about 20 kcal of each other. */
   bmrMode:"mifflin",  // "mifflin" | "katch" | "manual"
   bmrManual:1800,
-  leanMass:0,         // fat-free mass in kg, from a scale — 0 = not known
+  leanMass:0,         // fat-free mass in kg — 0 = not known
+  /* How wrong that lean figure could be, in kg either way. It matters because
+     a body-fat target IS a weight only once you fix lean mass, so a single
+     confident goal weight quietly launders the uncertainty out of sight.
+     A bioimpedance scale is worth about ±4 kg here; a careful visual read
+     against a waist trend, about ±2. Set 0 to show one number again. */
+  leanMassBand:2,
 
   wakingHours:16,     // hours awake; the rest of the 24 h is covered by BMR
 
@@ -939,6 +945,23 @@ if(!(S.schema >= 9)){
   Object.keys(S.days).forEach(function(k){ delete S.days[k].gymMins; });
   S.pm = Date.now();
   S.schema = 9;
+}
+if(!(S.schema >= 10)){
+  /* ---- v10: lean mass corrected, and given a band ----------------------
+     The stored 74.3 came off a bioimpedance scale, which asserted 18.0% body
+     fat at 90.6 kg. A careful visual read against the waist trend puts it in
+     the low twenties, which means lean mass nearer 71. Consumer BIA runs
+     ±4-8 percentage points and flatters muscular young men, so it is the
+     weaker of the two instruments.
+
+     71 is not a measurement either, which is the point of leanMassBand: the
+     endpoint is now shown as a range, because a body-fat target only becomes
+     a weight once you fix lean mass, and fixing it to a single confident
+     number was laundering the uncertainty out of sight. */
+  if(+S.profile.leanMass > 73) S.profile.leanMass = 71;
+  if(S.profile.leanMassBand === undefined) S.profile.leanMassBand = 2;
+  S.pm = Date.now();
+  S.schema = 10;
 }
 Store.save(S);
 }
@@ -1852,6 +1875,30 @@ function deficitWhy(d){
   return b ? ("Plan phase "+bandLabel(idx)+", from a trend weight of "+nw(tw)+" kg.")
            : "From your plan.";
 }
+/* A body-fat target expressed as a weight, as a RANGE — because the lean mass
+   it depends on is itself uncertain. Both ends move together: a heavier lean
+   estimate means a heavier weight at any given body-fat percentage. */
+function leanBand(){
+  var P = S.profile, l = +P.leanMass || 0;
+  if(!(l > 0)) return null;
+  var b = Math.max(0, pnum(P.leanMassBand, 0));
+  return {lo:Math.max(1, l-b), mid:l, hi:l+b, band:b};
+}
+function wAtBF(bf){
+  var lb = leanBand(); if(!lb) return "\u2014";
+  var f = 1 - Math.min(60, Math.max(1, +bf||12))/100;
+  if(!lb.band) return "\u2248"+n1(lb.mid/f);
+  return n1(lb.lo/f)+"\u2013"+n1(lb.hi/f);
+}
+function bfAtW(w){
+  var lb = leanBand(); if(!lb || !(w > 0)) return "\u2014";
+  /* a HEAVIER lean estimate means LESS fat at the same weight, so the ends
+     swap over relative to wAtBF */
+  var hiBf = (1 - lb.lo/w)*100, loBf = (1 - lb.hi/w)*100;
+  if(!lb.band) return n1((1-lb.mid/w)*100)+"%";
+  return n1(Math.max(0,loBf))+"\u2013"+n1(Math.max(0,hiBf))+"%";
+}
+
 function bmrBasis(d){
   var P = S.profile;
   if(P.bmrMode === "manual") return "set by hand, all 24 h";
@@ -2341,20 +2388,25 @@ function viewTrends(){
      fat-free mass, a body-fat target IS a weight, and it moves if your lean
      mass does. */
   var lean = +P.leanMass > 0 ? +P.leanMass : null;
-  var atBF = lean ? lean/(1-(+P.goalBF||12)/100) : +P.goalWeight;
+  var band = Math.max(0, pnum(P.leanMassBand, 0));
   h += '<h2 class="t-section" style="margin:26px 0 8px 4px">Where this ends</h2><div class="card">'+
     '<div class="kv"><span>Now</span><span>'+nw(w)+' kg</span></div>'+
     '<div class="kv"><span>Plan target</span><span>'+n1(+P.goalWeight||84)+' kg</span></div>'+
-    (lean?'<div class="kv"><span>'+P.goalBF+'% body fat on '+n1(lean)+' kg lean</span><span>\u2248'+
-      n1(atBF)+' kg</span></div>':'')+
+    (lean?
+      '<div class="kv"><span>'+P.goalBF+'% body fat</span><span>'+wAtBF(P.goalBF)+' kg</span></div>'+
+      '<div class="kv"><span>At '+n1(+P.goalWeight||84)+' kg you would be</span><span>'+
+        bfAtW(+P.goalWeight||84)+'</span></div>' : '')+
     '<div class="kv"><span>To go</span><span>'+n1(Math.max(0,w-(+P.goalWeight||84)))+' kg</span></div>'+
     '<div class="kv tot"><span>On the plan above</span><span>'+etaText()+'</span></div>'+
-    (lean?'<div class="note" style="border-top:.5px solid var(--sep)">Holding all '+n1(lean)+
-      ' kg of lean mass, '+P.goalBF+'% lands you at <b>'+n1(atBF)+' kg</b> and 16% at <b>'+
-      n1(lean/0.84)+' kg</b>. Shed 1\u20132 kg of lean on the way down \u2014 which is normal '+
-      'even done well \u2014 and those come in about a kilo lower. Bear in mind a bioimpedance '+
-      'scale typically reads body fat 2\u20134 points low for a lean, muscular frame, so treat '+
-      n1(atBF)+' kg as the optimistic end.</div>':'')+
+    (lean?'<div class="note" style="border-top:.5px solid var(--sep)">'+
+      'These are ranges because <b>lean mass is an estimate, not a measurement</b>. '+
+      'Yours is '+n1(lean)+' kg give or take '+n1(band)+', and a body-fat target only '+
+      'becomes a weight once you fix that figure \u2014 so a single number here would be '+
+      'hiding the uncertainty rather than removing it. '+
+      'Narrow the band by watching the waist tape: it is a direct measurement, and it '+
+      'constrains lean mass far better than any body-fat reading does. '+
+      'Shed 1\u20132 kg of lean on the way down, which is normal even done well, and the '+
+      'whole range slides about a kilo lower.</div>':'')+
   '</div>';
   h += '<h2 class="t-section" style="margin:26px 0 8px 4px">Last 7 days</h2><div class="card">'+ledger()+'</div>';
   h += '<h2 class="t-section" style="margin:26px 0 8px 4px">Weigh-ins</h2><div class="card">';
@@ -2561,8 +2613,14 @@ function planForecast(){
   }
   return out;
 }
+/* Finnish renders a short date as "1.1.", which is unambiguous only if you
+   already know the year — and a plan running past December crosses one. Add
+   the year whenever the date is not in the current one. */
 function fmtShort(dstr){
-  return new Date(dstr+"T12:00").toLocaleDateString(undefined,{day:"numeric",month:"short"});
+  var d = new Date(dstr+"T12:00");
+  var opts = {day:"numeric", month:"short"};
+  if(d.getFullYear() !== new Date().getFullYear()) opts.year = "numeric";
+  return d.toLocaleDateString(undefined, opts);
 }
 function etaText(){
   var f = planForecast();
@@ -2773,7 +2831,20 @@ function viewSetup(){
     numRow("Lean mass","fat-free weight from the scale · drives Katch-McArdle and your goal weight",
       P.leanMass, "setP('leanMass',this.value)", "0.1", "kg")+
     '<div class="row"><div class="grow"><div class="ttl t-body">Resting metabolism</div>'+
-      '<div class="sub2 t-foot">'+bmrBasis(today)+' \u2192 '+Math.round(bmrAt(today))+' kcal</div></div>'+
+      '<div class="sub2 t-foot">'+bmrBasis(today)+' \u2192 '+Math.round(bmrAt(today))+' kcal'+
+      /* Katch-McArdle is the better formula ONLY when lean mass is measured
+         well. Once lean mass is itself an estimate it becomes the worse one,
+         because Mifflin's inputs — weight, height, age — are all known
+         exactly. Worth saying out loud at the point of choosing, since the
+         two disagree by about 90 kcal here and the tempting option is wrong. */
+      (P.bmrMode === "katch" && pnum(P.leanMassBand,0) > 0
+        ? '<br><b style="color:var(--warn)">Mifflin is the safer pick right now.</b> '+
+          'Katch-McArdle is only better when lean mass is measured; yours is an '+
+          'estimate \u00b1'+n1(pnum(P.leanMassBand,0))+' kg, which swings this by '+
+          Math.round(21.6*pnum(P.leanMassBand,0)*2)+' kcal. Mifflin needs only '+
+          'weight, height and age, which you know exactly.'
+        : '')+
+      '</div></div>'+
       '<select onchange="setBmrMode(this.value)" style="background:var(--fill);border-radius:9px;padding:8px 10px">'+
         '<option value="mifflin"'+(P.bmrMode==="mifflin"?" selected":"")+'>Mifflin (from weight)</option>'+
         '<option value="katch"'+(P.bmrMode==="katch"?" selected":"")+'>Katch-McArdle (from lean)</option>'+
