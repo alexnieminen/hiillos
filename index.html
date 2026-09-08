@@ -413,7 +413,7 @@ var Store = {
   save: function(d){ if(!this.ok) return false; try{ localStorage.setItem(KEY, JSON.stringify(d)); return true; }catch(e){ return false; } }
 };
 
-var SCHEMA = 10;
+var SCHEMA = 11;
 var TKEY = "hiillos_gh_token";   // token lives OUTSIDE S so exports can't leak it
 
 var DEFAULT_PROFILE = {
@@ -963,6 +963,41 @@ if(!(S.schema >= 10)){
   S.pm = Date.now();
   S.schema = 10;
 }
+if(!(S.schema >= 11)){
+  /* ---- v11: bands rebuilt from the ceiling rather than round numbers ----
+     The old bands (800/600/500/400, stepping at 90/88/86) were set when the
+     working assumption was 18% body fat. At that figure an 800 deficit sat
+     exactly ON the muscle-loss ceiling, so the plan had to back off early.
+
+     At a low-twenties figure there is more fat mass, so the ceiling is higher
+     and 800 can be held further down. Each band is now set so its deficit
+     stays under the ceiling AT THE BAND'S FLOOR — the leanest, tightest point
+     it has to survive — with the margin widening as the weight falls:
+
+       above 88   800   ceiling at 88 is 846   95%
+       88 → 86    650   ceiling at 86 is 763   85%
+       86 → 84    550   ceiling at 84 is 681   81%
+       below 84   450   ceiling at 82 is 599   75%
+
+     Stopping the 800 at 88 rather than the 87.5 where it actually binds is
+     the deliberate headroom. This reaches 83.7 kg around 10 December instead
+     of 1 January.
+
+     Deliberately NOT extended below 84: body composition will be far better
+     known by January, and a plan written now for a body two months from now
+     is a guess dressed as a schedule. Revisit it then. */
+  if(S.plan && S.plan.bands && S.plan.bands.length === 4 &&
+     +S.plan.bands[0].above === 90 && +S.plan.bands[0].deficit === 800){
+    S.plan.bands = [
+      {above:88, deficit:800},
+      {above:86, deficit:650},
+      {above:84, deficit:550},
+      {above:0,  deficit:450}
+    ];
+  }
+  S.pm = Date.now();
+  S.schema = 11;
+}
 Store.save(S);
 }
 
@@ -1060,6 +1095,39 @@ function bandLabel(i){
   if(lo <= 0)            return "below " + n1(hi);
   return n1(hi) + " \u2192 " + n1(lo);
 }
+/* THE DEFICIT CEILING.
+   Fat can be mobilised at roughly 48.5 kcal per kg of fat mass per day
+   (Alpert's figure, after he corrected his own arithmetic). Push the shortfall
+   past that and the balance comes out of muscle instead.
+
+   The consequence that matters for a plan: the ceiling FALLS as you lean out,
+   because it scales with the fat you have left. A deficit that is comfortable
+   at 91 kg can be over the line at 84 kg without anything else changing —
+   which is why the bands step down, and why this is worth showing rather than
+   being something someone worked out once and wrote into a table.
+
+   Computed off the stored lean figure, which does not fall as you lose. That
+   biases fat mass low and so the ceiling low, which is the safe direction. */
+var KCAL_PER_KG_FM = 48.5;
+function deficitCeiling(w, lean){
+  var lb = leanBand();
+  if(!lb || !(w > 0)) return null;
+  var l = (lean === undefined) ? lb.mid : lean;
+  return Math.max(0, w - l) * KCAL_PER_KG_FM;
+}
+/* Two tiers, because lean mass is a band: over the central ceiling is a
+   problem now, over the pessimistic one only if you turn out leaner than
+   estimated. Conflating them would either cry wolf or say nothing. */
+function ceilingCheck(w, deficit){
+  var lb = leanBand();
+  if(!lb || !(deficit > 0)) return null;
+  var mid  = deficitCeiling(w, lb.mid);
+  var lean = deficitCeiling(w, lb.hi);   // leaner than thought = less fat = lower ceiling
+  if(deficit > mid)  return {level:"over",  ceiling:mid, lean:lean, by:deficit-mid};
+  if(deficit > lean) return {level:"tight", ceiling:mid, lean:lean, spare:mid-deficit};
+  return {level:"clear", ceiling:mid, lean:lean, spare:mid-deficit};
+}
+
 function planBandFor(w){
   var bs = (S.plan && S.plan.bands) || [];
   for(var i=0;i<bs.length;i++) if(w > (+bs[i].above||0)) return bs[i];
@@ -2645,12 +2713,26 @@ function planSection(){
       '. Eating at maintenance through a hard week is a deliberate part of the plan, '+
       'not a lapse \u2014 nothing here counts it as one.</div></div>';
   } else if(cur_b){
+    var cc = ceilingCheck(tw, +cur_b.deficit);
     h += '<div style="padding:14px 16px">'+
       '<div class="t-head" style="margin-bottom:4px">Phase '+
       esc(bandLabel((S.plan.bands||[]).indexOf(cur_b)))+'</div>'+
       '<div class="t-sub" style="color:var(--label2);line-height:1.5">'+
       'Deficit <b>'+Math.round(cur_b.deficit)+'</b> \u2192 about <b>'+n1(cur_b.deficit*7/7700)+
-      ' kg/week</b>. Trend weight '+nw(tw)+' kg.</div></div>';
+      ' kg/week</b>. Trend weight '+nw(tw)+' kg.'+
+      (cc ? '<br>'+(
+        cc.level === "over"
+          ? '<b style="color:var(--bad)">'+Math.round(cc.by)+
+            ' over the muscle-loss ceiling</b> of '+Math.round(cc.ceiling)+
+            ' at this weight \u2014 ease it back.'
+          : cc.level === "tight"
+          ? '<span style="color:var(--warn)">Ceiling '+Math.round(cc.ceiling)+
+            ', '+Math.round(cc.spare)+' spare</span> \u2014 but over the line if your '+
+            'lean mass turns out to be nearer the top of its band.'
+          : 'Ceiling '+Math.round(cc.ceiling)+' at this weight, so '+
+            Math.round(cc.spare)+' spare.'
+      ) : '')+
+      '</div></div>';
   }
 
   if(!f.length){
