@@ -413,7 +413,7 @@ var Store = {
   save: function(d){ if(!this.ok) return false; try{ localStorage.setItem(KEY, JSON.stringify(d)); return true; }catch(e){ return false; } }
 };
 
-var SCHEMA = 12;
+var SCHEMA = 13;
 var TKEY = "hiillos_gh_token";   // token lives OUTSIDE S so exports can't leak it
 
 var DEFAULT_PROFILE = {
@@ -446,6 +446,12 @@ var DEFAULT_PROFILE = {
      while holding lean mass fixed reports the BEST case as though it were the
      expectation — which flatters you by about 1.2 points over 6-7 kg. */
   leanLossShare:0.15,
+  /* The weight at which leanMass was assessed. Everything is measured FROM
+     here, not from whatever you weigh today — otherwise the accumulated lean
+     loss is forgotten every time you weigh in lower, and the projection
+     flatters you again by exactly the amount the share was added to stop.
+     0 = anchor to today's weight, which is right on first setup. */
+  leanAnchorW:0,
 
   wakingHours:16,     // hours awake; the rest of the 24 h is covered by BMR
 
@@ -1026,6 +1032,23 @@ if(!(S.schema >= 12)){
   });
   S.pm = Date.now();
   S.schema = 12;
+}
+if(!(S.schema >= 13)){
+  /* ---- v13: pin the lean estimate to the weight it was made at ----------
+     v12 walked lean mass down from whatever you weighed TODAY, which meant
+     the accumulated loss was forgotten every time you weighed in lower. The
+     projection at 84 kg read 15.5% while you were 90.6, and would have crept
+     back to 15.5% again by the time you actually got there — flattering you
+     by the exact 1.2 points the loss share was added to remove.
+
+     Anchoring it fixes the walk in place. leanMass is now "lean at
+     leanAnchorW", and everything downstream measures from there. */
+  if(!(pnum(S.profile.leanAnchorW, 0) > 0) && +S.profile.leanMass > 0){
+    S.profile.leanAnchorW = Math.round(latestWeight()*100)/100;
+  }
+  if(S.profile.leanLossShare === undefined) S.profile.leanLossShare = 0.15;
+  S.pm = Date.now();
+  S.schema = 13;
 }
 Store.save(S);
 }
@@ -2038,21 +2061,33 @@ function deficitWhy(d){
 /* A body-fat target expressed as a weight, as a RANGE — because the lean mass
    it depends on is itself uncertain. Both ends move together: a heavier lean
    estimate means a heavier weight at any given body-fat percentage. */
+/* The stored figure is what lean mass was at the anchor weight. `mid` is what
+   it is NOW, having carried the loss since. `at0` keeps the anchor-day value,
+   because the projections have to walk from there rather than from a figure
+   that has already been walked once. */
 function leanBand(){
-  var P = S.profile, l = +P.leanMass || 0;
-  if(!(l > 0)) return null;
+  var P = S.profile, l0 = +P.leanMass || 0;
+  if(!(l0 > 0)) return null;
   var b = Math.max(0, pnum(P.leanMassBand, 0));
-  return {lo:Math.max(1, l-b), mid:l, hi:l+b, band:b};
+  var now = leanAtWeight(l0, latestWeight());
+  return {lo:Math.max(1, now-b), mid:now, hi:now+b, band:b,
+          at0:l0, lo0:Math.max(1, l0-b), hi0:l0+b};
 }
 /* Lean mass does not hold while you cut, so projecting forward on today's
    figure quietly reports the perfect case. Carry the loss instead: some share
    of every kilo comes off as lean. Only downward — walking the projection
    back UP the scale would be inventing muscle. */
 function leanShare(){ return Math.max(0, Math.min(0.5, pnum(S.profile.leanLossShare, 0))); }
+function leanAnchor(){
+  var a = pnum(S.profile.leanAnchorW, 0);
+  return a > 0 ? a : latestWeight();
+}
+/* Lean mass at any weight, walked from the ANCHOR. Above the anchor there is
+   no loss to carry, and muscle is not invented on the way back up. */
 function leanAtWeight(l0, w){
-  var w0 = latestWeight(), s = leanShare();
-  if(!(w > 0) || w >= w0) return l0;
-  return Math.max(1, l0 - (w0 - w) * s);
+  var a = leanAnchor(), s = leanShare();
+  if(!(w > 0) || w >= a) return l0;
+  return Math.max(1, l0 - (a - w) * s);
 }
 /* The weight at a target body fat, solved rather than divided — because lean
    mass is itself a function of the weight you are solving for:
@@ -2060,27 +2095,28 @@ function leanAtWeight(l0, w){
    rearranges to  w = (L0 - s·W0) / (1 - s - k). */
 function wAtBFone(l0, bf){
   var k = Math.min(0.6, Math.max(0.01, (+bf||12)/100));
-  var s = leanShare(), w0 = latestWeight();
+  var s = leanShare(), a = leanAnchor();
   var den = 1 - s - k;
   if(den <= 0.02) return null;                 // no sensible solution
-  var w = (l0 - s*w0) / den;
-  if(!(w > 0) || w > w0) return l0/(1-k);      // above today: no lean loss to carry
+  var w = (l0 - s*a) / den;
+  if(!(w > 0) || w > a) return l0/(1-k);       // above the anchor: nothing to carry
   return w;
 }
 function wAtBF(bf){
   var lb = leanBand(); if(!lb) return "\u2014";
-  var lo = wAtBFone(lb.lo, bf), hi = wAtBFone(lb.hi, bf);
+  /* solve from the ANCHOR-day figures, since wAtBFone walks the loss itself */
+  var lo = wAtBFone(lb.lo0, bf), hi = wAtBFone(lb.hi0, bf);
   if(lo === null || hi === null) return "\u2014";
-  if(!lb.band){ var m = wAtBFone(lb.mid, bf); return m===null?"\u2014":"\u2248"+n1(m); }
+  if(!lb.band){ var m = wAtBFone(lb.at0, bf); return m===null?"\u2014":"\u2248"+n1(m); }
   return n1(Math.min(lo,hi))+"\u2013"+n1(Math.max(lo,hi));
 }
 function bfAtW(w){
   var lb = leanBand(); if(!lb || !(w > 0)) return "\u2014";
   /* a HEAVIER lean estimate means LESS fat at the same weight, so the ends
      swap over relative to wAtBF */
-  var hiBf = (1 - leanAtWeight(lb.lo, w)/w)*100;
-  var loBf = (1 - leanAtWeight(lb.hi, w)/w)*100;
-  if(!lb.band) return n1(Math.max(0,(1-leanAtWeight(lb.mid,w)/w)*100))+"%";
+  var hiBf = (1 - leanAtWeight(lb.lo0, w)/w)*100;
+  var loBf = (1 - leanAtWeight(lb.hi0, w)/w)*100;
+  if(!lb.band) return n1(Math.max(0,(1-leanAtWeight(lb.at0,w)/w)*100))+"%";
   return n1(Math.max(0,Math.min(loBf,hiBf)))+"\u2013"+n1(Math.max(0,Math.max(loBf,hiBf)))+"%";
 }
 
@@ -3184,6 +3220,17 @@ function viewSetup(){
       "15% is a good outcome while lifting and eating protein; 25% is ordinary",
       Math.round(pnum(P.leanLossShare,0.15)*100),
       "setP('leanLossShare',this.value/100)", "5", "%")+
+    numRow("Lean assessed at",
+      (function(){
+        var a = leanAnchor(), w = latestWeight(), lb = leanBand();
+        var t = "the weight your lean figure was measured at. Everything is walked "+
+                "from here, so the loss since is not forgotten";
+        if(lb && a - w > 0.4)
+          t += ". You have dropped "+n1(a-w)+" kg since, so lean now reads <b>"+
+               n1(lb.mid)+" kg</b> rather than "+n1(lb.at0);
+        return t;
+      })(),
+      n1(leanAnchor()), "setP('leanAnchorW',this.value)", "0.1", "kg")+
     numRow("On-target tolerance","how far either side of the implied rate still counts as on plan",
       Math.round(P.rateTol*100), "setP('rateTol',this.value/100)", "5", "%")+
   '</div>'+
