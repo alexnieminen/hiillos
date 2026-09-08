@@ -439,6 +439,13 @@ var DEFAULT_PROFILE = {
      A bioimpedance scale is worth about ±4 kg here; a careful visual read
      against a waist trend, about ±2. Set 0 to show one number again. */
   leanMassBand:2,
+  /* Share of each kilo lost that comes off as lean rather than fat. 0.15 is
+     the good-outcome figure for someone lifting and eating enough protein;
+     0.25 is ordinary; 0 would be perfect and is not a thing that happens.
+     It matters because projecting a body-fat percentage at a lower weight
+     while holding lean mass fixed reports the BEST case as though it were the
+     expectation — which flatters you by about 1.2 points over 6-7 kg. */
+  leanLossShare:0.15,
 
   wakingHours:16,     // hours awake; the rest of the 24 h is covered by BMR
 
@@ -2037,19 +2044,44 @@ function leanBand(){
   var b = Math.max(0, pnum(P.leanMassBand, 0));
   return {lo:Math.max(1, l-b), mid:l, hi:l+b, band:b};
 }
+/* Lean mass does not hold while you cut, so projecting forward on today's
+   figure quietly reports the perfect case. Carry the loss instead: some share
+   of every kilo comes off as lean. Only downward — walking the projection
+   back UP the scale would be inventing muscle. */
+function leanShare(){ return Math.max(0, Math.min(0.5, pnum(S.profile.leanLossShare, 0))); }
+function leanAtWeight(l0, w){
+  var w0 = latestWeight(), s = leanShare();
+  if(!(w > 0) || w >= w0) return l0;
+  return Math.max(1, l0 - (w0 - w) * s);
+}
+/* The weight at a target body fat, solved rather than divided — because lean
+   mass is itself a function of the weight you are solving for:
+       w - lean(w) = k·w,  lean(w) = L0 - (W0 - w)·s
+   rearranges to  w = (L0 - s·W0) / (1 - s - k). */
+function wAtBFone(l0, bf){
+  var k = Math.min(0.6, Math.max(0.01, (+bf||12)/100));
+  var s = leanShare(), w0 = latestWeight();
+  var den = 1 - s - k;
+  if(den <= 0.02) return null;                 // no sensible solution
+  var w = (l0 - s*w0) / den;
+  if(!(w > 0) || w > w0) return l0/(1-k);      // above today: no lean loss to carry
+  return w;
+}
 function wAtBF(bf){
   var lb = leanBand(); if(!lb) return "\u2014";
-  var f = 1 - Math.min(60, Math.max(1, +bf||12))/100;
-  if(!lb.band) return "\u2248"+n1(lb.mid/f);
-  return n1(lb.lo/f)+"\u2013"+n1(lb.hi/f);
+  var lo = wAtBFone(lb.lo, bf), hi = wAtBFone(lb.hi, bf);
+  if(lo === null || hi === null) return "\u2014";
+  if(!lb.band){ var m = wAtBFone(lb.mid, bf); return m===null?"\u2014":"\u2248"+n1(m); }
+  return n1(Math.min(lo,hi))+"\u2013"+n1(Math.max(lo,hi));
 }
 function bfAtW(w){
   var lb = leanBand(); if(!lb || !(w > 0)) return "\u2014";
   /* a HEAVIER lean estimate means LESS fat at the same weight, so the ends
      swap over relative to wAtBF */
-  var hiBf = (1 - lb.lo/w)*100, loBf = (1 - lb.hi/w)*100;
-  if(!lb.band) return n1((1-lb.mid/w)*100)+"%";
-  return n1(Math.max(0,loBf))+"\u2013"+n1(Math.max(0,hiBf))+"%";
+  var hiBf = (1 - leanAtWeight(lb.lo, w)/w)*100;
+  var loBf = (1 - leanAtWeight(lb.hi, w)/w)*100;
+  if(!lb.band) return n1(Math.max(0,(1-leanAtWeight(lb.mid,w)/w)*100))+"%";
+  return n1(Math.max(0,Math.min(loBf,hiBf)))+"\u2013"+n1(Math.max(0,Math.max(loBf,hiBf)))+"%";
 }
 
 function bmrBasis(d){
@@ -2558,8 +2590,9 @@ function viewTrends(){
       'hiding the uncertainty rather than removing it. '+
       'Narrow the band by watching the waist tape: it is a direct measurement, and it '+
       'constrains lean mass far better than any body-fat reading does. '+
-      'Shed 1\u20132 kg of lean on the way down, which is normal even done well, and the '+
-      'whole range slides about a kilo lower.</div>':'')+
+      'These already assume '+Math.round(leanShare()*100)+'% of each kilo comes off as '+
+      'lean rather than fat, so they are the realistic case and not the flattering '+
+      'one \u2014 holding all '+n1(lean)+' kg would read about a point better.</div>':'')+
   '</div>';
   h += '<h2 class="t-section" style="margin:26px 0 8px 4px">Last 7 days</h2><div class="card">'+ledger()+'</div>';
   h += '<h2 class="t-section" style="margin:26px 0 8px 4px">Weigh-ins</h2><div class="card">';
@@ -3147,6 +3180,10 @@ function viewSetup(){
       " g per kg lean mass", P.proteinTarget, "setP('proteinTarget',this.value)", "5", "g")+
     numRow("Goal weight","where the plan ends", P.goalWeight, "setP('goalWeight',this.value)", "0.5", "kg")+
     numRow("Goal body fat","", P.goalBF, "setP('goalBF',this.value)", "0.5", "%")+
+    numRow("Lean lost per kilo","share of each kilo down that comes off as lean, not fat. "+
+      "15% is a good outcome while lifting and eating protein; 25% is ordinary",
+      Math.round(pnum(P.leanLossShare,0.15)*100),
+      "setP('leanLossShare',this.value/100)", "5", "%")+
     numRow("On-target tolerance","how far either side of the implied rate still counts as on plan",
       Math.round(P.rateTol*100), "setP('rateTol',this.value/100)", "5", "%")+
   '</div>'+
