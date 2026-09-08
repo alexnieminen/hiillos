@@ -413,7 +413,7 @@ var Store = {
   save: function(d){ if(!this.ok) return false; try{ localStorage.setItem(KEY, JSON.stringify(d)); return true; }catch(e){ return false; } }
 };
 
-var SCHEMA = 11;
+var SCHEMA = 12;
 var TKEY = "hiillos_gh_token";   // token lives OUTSIDE S so exports can't leak it
 
 var DEFAULT_PROFILE = {
@@ -998,6 +998,28 @@ if(!(S.schema >= 11)){
   S.pm = Date.now();
   S.schema = 11;
 }
+if(!(S.schema >= 12)){
+  /* ---- v12: each day records the target it actually showed ---------------
+     The deficit was frozen per day from v6, but the TARGET is derived from
+     the deficit and the burn model together — so every improvement to the
+     burn model silently rewrote what past days had asked for. Correcting the
+     step over-crediting dropped historical targets by 100-150 kcal, and
+     intake that had matched them on the day started reading as a 124 kcal/day
+     overshoot that never happened.
+
+     Existing days are marked null: KNOWN to be unrecordable, rather than
+     back-filled with today's model, which is the error itself. The adherence
+     card excludes them and says how many and why. New days record properly
+     from here, so it heals within a fortnight. */
+  var _t12 = iso(new Date());
+  Object.keys(S.days).forEach(function(k){
+    var x = S.days[k];
+    if(!dayHasContent(x)) return;
+    if(k !== _t12 && x.target === undefined) x.target = null;
+  });
+  S.pm = Date.now();
+  S.schema = 12;
+}
 Store.save(S);
 }
 
@@ -1016,7 +1038,7 @@ function iso(d){ return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0
 function shift(dstr,n){ var p=dstr.split("-"); var d=new Date(+p[0],+p[1]-1,+p[2]); d.setDate(d.getDate()+n); return iso(d); }
 function save(){
   invalidateCal(); invalidateHab(); invalidateMA();
-  if(S.days[cur]) stampDeficit(cur);
+  if(S.days[cur]){ stampDeficit(cur); stampTarget(cur); }
   Store.save(S);
   GH.queue();                    // debounced push, if sync is set up
 }
@@ -1051,6 +1073,7 @@ function touch(d){                 // mark a record as changed, for sync merging
   var x = day(d);
   x.m = Date.now();
   stampDeficit(d);
+  stampTarget(d);
   return x;
 }
 
@@ -1159,6 +1182,34 @@ function stampDeficit(d){
   var x = S.days[d]; if(!x) return;
   if(d === today) x.deficit = planDeficit(d);
   else if(x.deficit === undefined) x.deficit = planDeficit(d);
+}
+
+/* Freeze the target the day actually SHOWED you.
+   The deficit was already frozen, but the target is derived from the deficit
+   AND the burn model — so improving the burn model silently rewrote what every
+   past day had asked for. Fixing the step over-crediting dropped historical
+   targets by 100-150 kcal, and intake that had matched them at the time
+   started reading as an overshoot. Same failure as the global deficit, one
+   level up: history has to record what was asked, not what would be asked if
+   you were asked again today.
+
+   Three states, and the distinction matters:
+     undefined  never stamped -> stamp it now
+     null       stamped as UNRECORDABLE (predates this) -> leave, and exclude
+     number     what the day asked for -> never touch again
+   Back-filling the old days with today's model is precisely the bug, so they
+   are marked null rather than guessed at. */
+function stampTarget(d){
+  var x = S.days[d]; if(!x) return;
+  if(d === today){ x.target = Math.round(burn(d).targetLive); return; }
+  if(x.target === undefined) x.target = Math.round(burn(d).targetLive);
+}
+/* The target a given day is judged against: what it recorded, or nothing. */
+function recordedTarget(d){
+  var x = peek(d);
+  if(!x) return null;
+  if(d === today) return burn(d).targetLive;
+  return (typeof x.target === "number" && x.target > 0) ? x.target : null;
 }
 
 /* The loss rate the active deficit implies, with a tolerance band. This
@@ -1293,8 +1344,14 @@ function burn(d, raw){
      calories still to eat. Every item you log replaces a slice of estimate
      with a slice of measurement, and when the day is full the figure shown is
      your measured TEF to the calorie with nothing left projected. */
-  var r      = plannedTefRate(Math.max(600, base - def));
-  var target = Math.max(0, (base - def) / (1 - r));
+  var r = plannedTefRate(Math.max(600, base - def));
+  /* targetLive is what the CURRENT model would ask for. target is what the day
+     actually asked — the same thing for today, and the frozen record for any
+     day already gone. Everything that judges adherence must use the latter. */
+  var targetLive = Math.max(0, (base - def) / (1 - r));
+  var frozen = (d !== today && x && typeof x.target === "number" && x.target > 0)
+             ? x.target : null;
+  var target = frozen !== null ? frozen : targetLive;
   var tefPlanned = r * target;
   var tefLeft    = r * Math.max(0, target - e.k);
   var tefNow     = tefEarned + tefLeft;
@@ -1303,6 +1360,7 @@ function burn(d, raw){
            fb:fb, base:base, target:target, deficit:def, eaten:e,
            tef:tefNow, tefEarned:tefEarned, tefLeft:tefLeft,
            tefPlanned:tefPlanned, tefRate:r,
+           targetLive:targetLive, targetFrozen:frozen,
            /* total is the projection the target was built from, so
               total − deficit === target always holds on screen. */
            total:base + tefPlanned,
@@ -2758,17 +2816,32 @@ function planSection(){
    matters far less than a fortnight of quietly eating 250 over. */
 function adherenceSection(){
   var n = 0, intake = 0, tgt = 0, prot = 0, defActual = 0, defPlanned = 0, over = 0, under = 0;
+  var skipped = 0, logged = 0;
   for(var i=1;i<=14;i++){
     var d = shift(today,-i), x = peek(d);
     if(!x || !x.entries || !x.entries.length) continue;
+    logged++;
+    /* Only days that RECORDED a target can be judged against one. A day
+       logged before targets were frozen has no honest figure to compare
+       with, and recomputing one with today's model is exactly the mistake
+       this exists to stop. */
+    var rt = recordedTarget(d);
+    if(rt === null){ skipped++; continue; }
     var b = burn(d), e = b.eaten;
-    n++; intake += e.k; tgt += b.target; prot += e.p;
+    n++; intake += e.k; tgt += rt; prot += e.p;
     defActual += (b.actual - e.k); defPlanned += b.deficit;
-    if(e.k > b.target + 100) over++; else if(e.k < b.target - 250) under++;
+    if(e.k > rt + 100) over++; else if(e.k < rt - 250) under++;
   }
   var h = '<h2 class="t-section" style="margin:26px 0 8px 4px">Adherence</h2><div class="card">';
+  var skipNote = skipped
+    ? '<div class="note" style="border-top:.5px solid var(--sep)">'+skipped+
+      ' of the last '+logged+' logged days are left out: they were logged before '+
+      'the app started recording each day\u2019s target, and the burn model has '+
+      'improved since. Judging them against what it would ask <i>now</i> would '+
+      'invent an overshoot that never happened. They rejoin as new days accumulate.'+
+      '</div>' : '';
   if(n < 4) return h + '<div class="empty">Log food on a few more days and this compares what '+
-    'you ate with what the app asked for.</div></div>';
+    'you ate with what the app actually asked for on the day.</div>'+skipNote+'</div>';
 
   var dv = (intake - tgt)/n;
   var pill = Math.abs(dv) < 75 ? '<span class="pill g">within '+Math.round(Math.abs(dv))+' kcal/day</span>'
@@ -2799,8 +2872,8 @@ function adherenceSection(){
       '<div style="margin-bottom:7px">'+pill+'</div>'+
       '<div class="t-sub" style="color:var(--label2);line-height:1.5">'+msg+'</div>'+
       '<div class="t-cap" style="color:var(--label3);margin-top:9px">From '+n+
-        ' logged days in the last 14.</div>'+
-    '</div></div>';
+        ' day'+(n===1?'':'s')+' in the last 14 that recorded a target.</div>'+
+    '</div>'+skipNote+'</div>';
 }
 /* preserveAspectRatio="none" was stretching the chart to the pane width, which
    scales the stroke widths unevenly with it — a 3px trend line rendered as a
@@ -4146,7 +4219,7 @@ function rollDay(){
   today = now;
   if(wasToday || cur > today) cur = today;
   invalidateHab(); invalidateCal(); invalidateMA();
-  if(S.days[today]) stampDeficit(today);
+  if(S.days[today]){ stampDeficit(today); stampTarget(today); }
   render();
   return true;
 }
