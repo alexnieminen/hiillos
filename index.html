@@ -1034,6 +1034,33 @@ var today = iso(new Date());
 var cur = today;
 var fbMode = "avg";
 
+/* ---- one-time: recover the targets that ARE recoverable ------------------
+   v12 marked every pre-existing day unrecordable, which was too blunt. The
+   burn model last changed on 2026-09-04 22:35 (the gym figure going from a
+   flat 350 to a flat 255). Days logged from 2026-09-05 onward were therefore
+   logged against the model still running today, so recomputing their target
+   reproduces what they actually showed — it is a reconstruction, not a guess.
+   Days before that saw a different model and stay excluded.
+
+   This runs here rather than in the migration block because it needs `today`,
+   which is only defined at this point; and it calls burn(d, true) so it never
+   touches the calibration cache, which is not initialised yet either. */
+(function backfillTargets(){
+  var MODEL_STABLE_FROM = "2026-09-05";
+  if(S.targetsBackfilled) return;
+  var n = 0;
+  Object.keys(S.days).forEach(function(k){
+    var x = S.days[k];
+    if(!dayHasContent(x)) return;
+    if(k < MODEL_STABLE_FROM) return;
+    if(x.target !== null && x.target !== undefined) return;
+    x.target = Math.round(burn(k, true).targetLive);
+    n++;
+  });
+  S.targetsBackfilled = true;
+  if(n) Store.save(S);
+})();
+
 function iso(d){ return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
 function shift(dstr,n){ var p=dstr.split("-"); var d=new Date(+p[0],+p[1]-1,+p[2]); d.setDate(d.getDate()+n); return iso(d); }
 function save(){
@@ -2816,7 +2843,7 @@ function planSection(){
    matters far less than a fortnight of quietly eating 250 over. */
 function adherenceSection(){
   var n = 0, intake = 0, tgt = 0, prot = 0, defActual = 0, defPlanned = 0, over = 0, under = 0;
-  var skipped = 0, logged = 0;
+  var skipped = 0, logged = 0, rows = [];
   for(var i=1;i<=14;i++){
     var d = shift(today,-i), x = peek(d);
     if(!x || !x.entries || !x.entries.length) continue;
@@ -2831,6 +2858,7 @@ function adherenceSection(){
     n++; intake += e.k; tgt += rt; prot += e.p;
     defActual += (b.actual - e.k); defPlanned += b.deficit;
     if(e.k > rt + 100) over++; else if(e.k < rt - 250) under++;
+    rows.push({d:d, eaten:e.k, target:rt, diff:e.k - rt});
   }
   var h = '<h2 class="t-section" style="margin:26px 0 8px 4px">Adherence</h2><div class="card">';
   var skipNote = skipped
@@ -2840,8 +2868,24 @@ function adherenceSection(){
       'improved since. Judging them against what it would ask <i>now</i> would '+
       'invent an overshoot that never happened. They rejoin as new days accumulate.'+
       '</div>' : '';
-  if(n < 4) return h + '<div class="empty">Log food on a few more days and this compares what '+
+  if(n < 3) return h + '<div class="empty">Log food on a few more days and this compares what '+
     'you ate with what the app actually asked for on the day.</div>'+skipNote+'</div>';
+
+  /* Under about five days an average is worse than the days themselves: one
+     heavy evening moves it enough to look like a habit. List them until
+     there is enough history for the mean to mean something. */
+  var dayRows = "";
+  if(n <= 5){
+    dayRows = '<div class="kv" style="color:var(--label2);font-size:13px">'+
+        '<span>Day</span><span>ate / asked</span></div>'+
+      rows.slice().reverse().map(function(r){
+        var cls = Math.abs(r.diff) <= 100 ? "g" : Math.abs(r.diff) <= 300 ? "o" : "r";
+        return '<div class="kv"><span>'+
+          new Date(r.d+"T12:00").toLocaleDateString(undefined,{weekday:"short",day:"numeric",month:"short"})+
+          '</span><span>'+Math.round(r.eaten)+' / '+Math.round(r.target)+
+          '  <span class="pill '+cls+'">'+(r.diff>=0?"+":"")+Math.round(r.diff)+'</span></span></div>';
+      }).join("");
+  }
 
   var dv = (intake - tgt)/n;
   var pill = Math.abs(dv) < 75 ? '<span class="pill g">within '+Math.round(Math.abs(dv))+' kcal/day</span>'
@@ -2860,7 +2904,7 @@ function adherenceSection(){
       Math.round(defPlanned/n)+" deficit is a bigger cut than you chose. At 18, with football, "+
       "that's the situation that costs lean mass and recovery rather than fat.";
 
-  return h +
+  return h + dayRows +
     '<div class="kv"><span>Average intake</span><span>'+Math.round(intake/n)+' kcal</span></div>'+
     '<div class="kv"><span>Average target</span><span>'+Math.round(tgt/n)+' kcal</span></div>'+
     '<div class="kv"><span>Average protein</span><span>'+Math.round(prot/n)+' / '+
