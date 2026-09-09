@@ -1100,6 +1100,9 @@ function save(){
   GH.queue();                    // debounced push, if sync is set up
 }
 function n1(x){ return Math.round(x*10)/10; }
+/* A tracked percentage keeps its decimal: "19%" next to "21.9%" reads as a
+   different kind of number, and a tenth is the resolution this thing has. */
+function pct1(x){ return (Math.round(x*10)/10).toFixed(1)+"%"; }
 /* Idle intensity lives between 1.10 and 1.60 and is tuned in steps of 0.05,
    so one decimal is not enough resolution to show it: n1 renders both 1.25
    and 1.30 as "1.3", which hides exactly the difference you would be tuning. */
@@ -2116,8 +2119,48 @@ function bfAtW(w){
      swap over relative to wAtBF */
   var hiBf = (1 - leanAtWeight(lb.lo0, w)/w)*100;
   var loBf = (1 - leanAtWeight(lb.hi0, w)/w)*100;
-  if(!lb.band) return n1(Math.max(0,(1-leanAtWeight(lb.at0,w)/w)*100))+"%";
-  return n1(Math.max(0,Math.min(loBf,hiBf)))+"\u2013"+n1(Math.max(0,Math.max(loBf,hiBf)))+"%";
+  if(!lb.band) return pct1(Math.max(0,(1-leanAtWeight(lb.at0,w)/w)*100));
+  return (Math.round(Math.max(0,Math.min(loBf,hiBf))*10)/10).toFixed(1)+
+    "\u2013"+pct1(Math.max(0,Math.max(loBf,hiBf)));
+}
+
+/* ONE number.
+   A range is the honest answer to "what is my body fat" and a useless answer
+   to "is this working" — and a page that only ever answers the first leaves
+   the scale's own reading as the only single figure in your life, which is
+   the figure that is wrong. So: the central estimate, on its own, big.
+   The band is still here, one line down, doing the job it should do.
+
+   Deliberately the same arithmetic as everything else on this page: weight
+   (measured) minus lean mass walked from its anchor (estimated), so it can
+   never disagree with the endpoint card or the forecast. */
+function bfPct(w){
+  var lb = leanBand();
+  if(!lb || !(w > 0)) return null;
+  return Math.max(0, (1 - leanAtWeight(lb.at0, w) / w) * 100);
+}
+function fatKg(w){
+  var lb = leanBand();
+  if(!lb || !(w > 0)) return null;
+  return Math.max(0, w - leanAtWeight(lb.at0, w));
+}
+/* The change, which is the trustworthy part. The level inherits every bit of
+   the lean-mass uncertainty; the change barely does, because the same band
+   error sits at both ends and cancels. Only report it if there is really a
+   weigh-in back there — trendWeightAt() falls back to the nearest earlier
+   reading, and comparing today with a figure from six weeks ago while calling
+   it four would be inventing progress. */
+function bfChange(days){
+  var arr = sortedWeights();
+  if(arr.length < 4) return null;
+  var d0 = shift(today, -days), from = shift(d0, -6), ok = false;
+  for(var i = 0; i < arr.length; i++){
+    if(arr[i].d >= from && arr[i].d <= d0){ ok = true; break; }
+  }
+  if(!ok) return null;
+  var a = bfPct(trendWeightAt(d0)), b = bfPct(trendWeightAt(today));
+  if(a === null || b === null) return null;
+  return {from:a, to:b, delta:b - a, days:days};
 }
 
 function bmrBasis(d){
@@ -2584,6 +2627,63 @@ function keepRecent(i){
   toast(f.n+" saved to your library");
 }
 
+/* The single figure the whole app has been dancing around. It exists because
+   the alternative single figure — the one on the bathroom scale — is the one
+   that keeps derailing the plan, and you cannot argue someone out of a number
+   by offering them a range. */
+function bfSection(){
+  var h = '<h2 class="t-section" style="margin:26px 0 8px 4px">Body fat</h2><div class="card">';
+  var lb = leanBand();
+  if(!lb) return h + '<div class="empty">Set your lean mass in Setup — that is the one '+
+    'estimate this needs, and it turns your weight into a body-fat figure.</div></div>';
+  if(!sortedWeights().length) return h + '<div class="empty">Log a morning weight and this '+
+    'becomes a number.</div></div>';
+
+  var w = trendWeightAt(today), p = bfPct(w), f = fatKg(w);
+  if(p === null) return h + '<div class="empty">\u2014</div></div>';
+  var lean = w - f, ch = bfChange(28);
+  var pill = "";
+  if(ch){
+    var dp = ch.delta, dk = fatKg(trendWeightAt(shift(today,-28)));
+    var dfat = (dk === null) ? null : f - dk;
+    var cls = dp <= -0.25 ? "g" : dp >= 0.25 ? "r" : "o";
+    var sgn = function(v){ return (v > 0 ? "+" : "\u2212") + n1(Math.abs(v)); };
+    pill = '<span class="pill '+cls+'">'+sgn(dp)+' points in 4 weeks'+
+      (dfat === null || Math.abs(dfat) < 0.15 ? "" :
+        ' \u00b7 '+sgn(dfat)+' kg of fat')+'</span>';
+  }
+
+  h += '<div style="padding:18px 16px;text-align:center">'+
+    '<div class="t-huge">'+pct1(p)+'</div>'+
+    '<div class="t-foot" style="color:var(--label2);margin-top:4px">estimated body fat \u00b7 '+
+      'from '+nw(w)+' kg trend weight</div>'+
+    (pill ? '<div style="margin-top:10px">'+pill+'</div>'
+          : '<div class="note" style="padding:8px 0 0">Another couple of weeks of weigh-ins '+
+            'and this also shows the change.</div>')+
+    '</div>'+
+    '<div class="kv"><span>Fat</span><span>'+f.toFixed(1)+' kg</span></div>'+
+    '<div class="kv"><span>Lean</span><span>'+lean.toFixed(1)+' kg</span></div>'+
+    (lb.band ? '<div class="kv"><span>If lean sits at the edge of its band</span><span>'+
+      bfAtW(w)+'</span></div>' : '')+
+    '<div class="note" style="border-top:.5px solid var(--sep)">'+
+      'Your scale does not measure this, and neither does this app. The scale passes a '+
+      'current through you and <b>predicts</b> fat from how easily it flows \u2014 and on '+
+      'someone young, trained and well hydrated that prediction runs several points low. '+
+      'That is why it can sit stubbornly in the teens while the mirror says otherwise, '+
+      'and why it barely budges for weeks at a time: it is not tracking you, it is '+
+      'tracking your water. '+
+      'This figure instead divides something you genuinely measure \u2014 your weight \u2014 by '+
+      'something you estimated once: '+n1(lb.at0)+' kg of lean mass at '+nw(leanAnchor())+
+      ' kg, give or take '+n1(lb.band)+'. It then carries '+Math.round(leanShare()*100)+
+      '% of every lost kilo away as lean, so it is the realistic case rather than the '+
+      'flattering one. '+
+      'It can be a point or two out. What it cannot do is drift: it is out by the '+
+      '<i>same</i> amount every day, so the change is worth far more than the level \u2014 '+
+      'and the only thing feeding it that moves is the scale weight you already trust.'+
+    '</div>'+
+  '</div>';
+  return h;
+}
 function viewTrends(){
   var P=S.profile, arr=sortedWeights(), h=brandLine()+'<h1 class="t-large">Trend</h1>';
   var wr = weeklyRate(), w = latestWeight();
@@ -2600,6 +2700,7 @@ function viewTrends(){
       '</div>'+chartSVG(ma)+'</div>';
     if(wr) h += adviceCard(wr,P);
   }
+  h += bfSection();
   h += planSection();
   h += adherenceSection();
   h += calibrationSection();
@@ -2616,11 +2717,15 @@ function viewTrends(){
     (lean?
       '<div class="kv"><span>'+P.goalBF+'% body fat</span><span>'+wAtBF(P.goalBF)+' kg</span></div>'+
       '<div class="kv"><span>At '+n1(+P.goalWeight||84)+' kg you would be</span><span>'+
-        bfAtW(+P.goalWeight||84)+'</span></div>' : '')+
+        pct1(bfPct(+P.goalWeight||84))+'</span></div>'+
+      (band ? '<div class="kv"><span>\u2026 at the edges of the lean band</span><span>'+
+        bfAtW(+P.goalWeight||84)+'</span></div>' : '') : '')+
     '<div class="kv"><span>To go</span><span>'+n1(Math.max(0,w-(+P.goalWeight||84)))+' kg</span></div>'+
     '<div class="kv tot"><span>On the plan above</span><span>'+etaText()+'</span></div>'+
     (lean?'<div class="note" style="border-top:.5px solid var(--sep)">'+
-      'These are ranges because <b>lean mass is an estimate, not a measurement</b>. '+
+      'The single figure is the working estimate; the range beside it is where you land '+
+      'if lean mass sits at the edge of its band \u2014 because <b>lean mass is an estimate, '+
+      'not a measurement</b>. '+
       'Yours is '+n1(lean)+' kg give or take '+n1(band)+', and a body-fat target only '+
       'becomes a weight once you fix that figure \u2014 so a single number here would be '+
       'hiding the uncertainty rather than removing it. '+
@@ -2895,9 +3000,15 @@ function planSection(){
     h += '<div class="kv" style="color:var(--label2);font-size:13px">'+
       '<span>Phase</span><span>Deficit \u00b7 kg/wk \u00b7 lands</span></div>';
     f.forEach(function(p,i){
+      /* The phase labels are weights; the caption says what those weights
+         mean on the body, so the plan and the Body fat card are the same
+         claim rather than two numbers to reconcile. */
+      var cap = [], bp = bfPct(p.to);
+      if(bp !== null) cap.push('ends near '+pct1(bp)+' body fat');
+      if(p.pause) cap.push('+'+p.pause+' maintenance day'+(p.pause===1?'':'s'));
       h += '<div class="kv"><span>'+(i===0?'<b>':'')+esc(p.label)+(i===0?'</b>':'')+
-        (p.pause?'<br><span class="t-cap" style="color:var(--label3)">+'+p.pause+
-          ' maintenance day'+(p.pause===1?'':'s')+'</span>':'')+'</span>'+
+        (cap.length?'<br><span class="t-cap" style="color:var(--label3)">'+
+          cap.join(' \u00b7 ')+'</span>':'')+'</span>'+
         '<span>'+Math.round(p.deficit)+' \u00b7 '+n1(p.rate)+' \u00b7 '+fmtShort(p.end)+'</span></div>';
     });
     h += '<div class="kv tot"><span>At '+n1(+S.profile.goalWeight||84)+' kg</span><span>'+
