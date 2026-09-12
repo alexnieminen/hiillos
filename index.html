@@ -1561,7 +1561,8 @@ function burn(d, raw){
   var fbCal = fb ? fb.credited : 0;
 
   var cal  = raw ? 1 : calFactor();                 // measured correction
-  var live = (bmr + neat + walk + gym + fbCal) * cal;   // what TODAY'S model makes of it
+  var rawLive = bmr + neat + walk + gym + fbCal;        // before the measured correction
+  var live = rawLive * cal;                            // what TODAY'S model makes of it
 
   var e   = eaten(d);
   var def = deficitFor(d);
@@ -1644,6 +1645,12 @@ function burn(d, raw){
            /* how far today's model has walked away from this day's own price.
               Zero for today and for any day not yet frozen. */
            drift: frozen !== null ? (live - base) : 0, itemScale: km,
+           /* How much of today's number is the measured-burn correction. A day
+              frozen before you switched that on is priced without it, so this
+              is usually the whole of the drift \u2014 and "your settings changed" is
+              a useless thing to be told when the setting in question is one the
+              app worked out for you. */
+           driftCal: live - rawLive,
            cal:cal, tefActual:tefEarned, np:np,
            pal: (bmrShown*kb) > 0 ? (base + tefPlanned)/(bmrShown*kb) : 0 };
 }
@@ -2324,13 +2331,23 @@ function paintPane(pane, d, sp, instant){
        change nobody made reads as a fault rather than as information. */
     var showDr = d !== today && Math.abs(b.drift) > 40;
     dr.style.display = showDr ? "" : "none";
-    if(showDr) dr.innerHTML = 'Held at what this day was actually worth at the time. '+
-      'Your settings have moved '+Math.round(Math.abs(b.drift))+' kcal since, which would '+
-      'make it '+Math.round(b.total + b.drift)+' \u2014 that belongs to the new settings, '+
-      'not to this day, so editing the steps above moves this day by what the steps '+
-      'are worth and leaves the rest alone. '+
-      '<a data-press style="color:var(--accent)" onclick="repriceDay(\''+d+'\')">'+
-      'Re-price it at today\u2019s settings</a> if the old ones were wrong.';
+    if(showDr){
+      var c0 = calibration();
+      var mostlyCal = Math.abs(b.driftCal) > Math.abs(b.drift)*0.6 && Math.abs(b.driftCal) > 20;
+      dr.innerHTML = 'Held at what this day was actually worth at the time. The model has '+
+        'moved '+Math.round(Math.abs(b.drift))+' kcal since, which would make it '+
+        Math.round(b.total + b.drift)+' \u2014 '+
+        (mostlyCal
+          ? 'and that is your <b>measured burn correction</b>'+
+            (c0 ? ' (×'+n2(c0.clamped)+', worked out from '+c0.span+' days of '+
+              'weigh-ins)' : '')+', which came in after this day was recorded. '+
+            'Nothing in Setup moved.'
+          : 'that belongs to the settings that changed, not to this day.')+
+        ' Editing the steps above moves this day by what the steps are worth and leaves '+
+        'the rest alone. '+
+        '<a data-press style="color:var(--accent)" onclick="repriceDay(\''+d+'\')">'+
+        'Re-price it at today\u2019s numbers</a> to use the correction here too.';
+    }
   }
   var mxb = pane.querySelector(".js-mx");
   if(mxb){
@@ -3143,7 +3160,7 @@ function calibrationSection(){
         'plus the energy in the weight that came off. '+
         (Math.abs(off) < 4
           ? 'That\'s close enough that the model is doing its job — no correction needed.'
-          : 'Turning the correction on multiplies your burn by ×'+n1(c.clamped)+
+          : 'Turning the correction on multiplies your burn by ×'+n2(c.clamped)+
             ', so your daily target follows what your body actually does instead of the formulas.')+
         '<br><br>Over '+c.span+' days the scale noise alone is worth about \u00b1'+
         Math.round(c.se)+' kcal/day, so this reading is only worth so much on its own. '+
