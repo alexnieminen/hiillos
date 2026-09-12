@@ -1094,8 +1094,13 @@ var fbMode = "avg";
 function iso(d){ return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
 function shift(dstr,n){ var p=dstr.split("-"); var d=new Date(+p[0],+p[1]-1,+p[2]); d.setDate(d.getDate()+n); return iso(d); }
 function save(){
-  invalidateCal(); invalidateHab(); invalidateMA();
+  invalidateCal(); invalidateHab(); invalidateMA(); invalidateFrozen();
   if(S.days[cur]){ stampDeficit(cur); stampTarget(cur); }
+  /* ...and today, which is not necessarily `cur`. Without this, adding a
+     maintenance window while swiped back to a past day left today's frozen
+     deficit at the old band value while every screen showed 0, and rollDay
+     then froze the stale figure onto yesterday for good. */
+  if(today !== cur && S.days[today]){ stampDeficit(today); stampTarget(today); }
   Store.save(S);
   GH.queue();                    // debounced push, if sync is set up
 }
@@ -1264,6 +1269,86 @@ function stampTarget(d){
   if(d === today){ x.target = Math.round(burn(d).targetLive); return; }
   if(x.target === undefined) x.target = Math.round(burn(d).targetLive);
 }
+/* ---------- re-pricing a past day -----------------------------------------
+   The freeze protects history from the MODEL changing. It was never meant to
+   protect it from the DAY being completed. Typing in the steps you actually
+   walked is a correction to the record, not a rewrite of it — so the day is
+   re-priced, but by the VALUE OF THE EDIT ONLY.
+
+   Measured as a difference of two evaluations of today's model, taken in the
+   same tick with the same caches, so every global term cancels and only the
+   edit survives. Re-solving from targetLive instead would hand you the entire
+   accumulated drift — the gym-350-to-255 correction, re-armed and delivered by
+   an unrelated keystroke.
+
+   Deliberately NOT called from save() or touch(): those stay write-once, or
+   every save would drag history along behind it. */
+var _lastRebase = null;                    // session only — nothing is stored
+function rebaseDay(d, before){
+  var x = S.days[d];
+  if(!x || d === today) return 0;
+  if(!(typeof x.target === "number" && x.target > 0)) return 0;   // null stays null
+  if(x.deficit === undefined) return 0;
+  var delta = (rawBase(d) - before) * calFactor();
+  if(Math.abs(delta) < 0.5) return 0;
+  var net = Math.max(0, frozenNet(x.target) + delta);
+  var t0  = x.target;
+  x.target = Math.round(net / (1 - plannedTefRate(Math.max(600, net))));
+  x.m = Date.now();
+  if(x.target === t0) return 0;
+  _lastRebase = {d:d, was:t0};
+  return x.target - t0;
+}
+function undoRebase(){
+  if(!_lastRebase || !S.days[_lastRebase.d]) return;
+  S.days[_lastRebase.d].target = _lastRebase.was;
+  S.days[_lastRebase.d].m = Date.now();
+  _lastRebase = null;
+  save(); render(); toast("Target put back");
+}
+function wkday(d){
+  return new Date(d+"T12:00").toLocaleDateString(undefined,{weekday:"short"});
+}
+/* Wrap any mutation of a burn INPUT on a given day. */
+function editDay(d, fn){
+  var pre = (d !== today && S.days[d] && typeof S.days[d].target === "number" &&
+             S.days[d].deficit !== undefined) ? rawBase(d) : null;
+  fn();
+  var moved = pre !== null ? rebaseDay(d, pre) : 0;
+  if(moved) toast(wkday(d)+" re-priced: eat "+S.days[d].target+
+                  " ("+(moved>0?"+":"")+moved+")");
+}
+/* A weigh-in is not a property of one day: weightAt takes the latest reading
+   on or before d, so it prices every day from here to the next weigh-in. All
+   of those are days whose own record changed, so all of them re-price. The
+   scan is self-limiting — days past the next weigh-in have an unchanged
+   weightAt and rebaseDay returns on the half-kcal guard. The moving-average
+   cache MUST be cleared between the two evaluations or weightAt returns the
+   stale reading and every delta is identically zero; clearing it does not
+   touch the habitual-step or calibration caches, so those still cancel. */
+function editWeight(from, fn){
+  var ds = Object.keys(S.days).filter(function(k){
+    return k >= from && k < today && dayHasContent(S.days[k]) &&
+           typeof S.days[k].target === "number" && S.days[k].deficit !== undefined;
+  }).sort();
+  var pre = ds.map(rawBase);
+  fn();
+  invalidateMA();
+  var n = 0, first = null;
+  for(var i=0;i<ds.length;i++) if(rebaseDay(ds[i], pre[i])){ n++; if(!first) first = ds[i]; }
+  if(n) toast(n === 1 ? wkday(first)+" re-priced: eat "+S.days[first].target
+                      : n+" days re-priced");
+}
+/* A maintenance mark. A window added after the fact cannot un-ask what the app
+   already asked, so this changes no number on the day — it changes whether the
+   day is GRADED. */
+function setMx(d, on){
+  var x = S.days[d]; if(!x) return;
+  if(on) x.mx = 1; else delete x.mx;
+  x.m = Date.now(); save(); render();
+  toast(on ? "Marked maintenance " + "\u00b7" + " left out of adherence" : "Mark removed");
+}
+
 /* The target a given day is judged against: what it recorded, or nothing. */
 function recordedTarget(d){
   var x = peek(d);
@@ -1280,7 +1365,17 @@ function targetRate(d){
   var def = deficitFor(d || today);
   var mid = def * 7 / 7700;
   var tol = Math.max(0.1, Math.min(0.8, +S.profile.rateTol || 0.35));
-  return {mid:mid, low:mid*(1-tol), high:mid*(1+tol), deficit:def};
+  /* A maintenance phase has a target rate of zero, and a percentage of zero is
+     still zero \u2014 which collapsed the band to the single point [0,0] and left
+     every consumer with no reachable "on target" branch. A perfectly executed
+     exam week in which the scale drifted 0.2 kg was classified as "losing
+     faster than this phase intends" and answered with "add 300 kcal/day".
+
+     A pause needs an ABSOLUTE band, because what it is really asking is "is the
+     scale flat?", and flat means inside the water noise: a 7-day average moves
+     about \u00b10.3 kg/week on hydration alone at a true rate of zero. */
+  if(mid <= 0.02) return {mid:0, low:-0.30, high:0.30, deficit:def, hold:true};
+  return {mid:mid, low:mid*(1-tol), high:mid*(1+tol), deficit:def, hold:false};
 }
 
 /* =================================================================
@@ -1372,6 +1467,53 @@ function zoneName(z){ return {light:"Below zones", fat:"Fat Burn", cardio:"Cardi
               projected TEF everywhere, which overstated your deficit on every
               day you came in under target — the days you most wanted to trust.
 */
+/* ---------- recovering the base a frozen day was priced at ----------------
+   stampTarget froze `target`, and targetLive is
+
+       target = net / (1 − plannedTefRate(max(600, net))),   net = base − deficit
+
+   That map is strictly increasing in net on every branch, so it INVERTS:
+   x.target and x.deficit — both already on every day since schema 12 and 6
+   — are a complete record of the base the day was priced at. Nothing new is
+   stored, and that is the whole point: mergeRemote replaces day records
+   wholesale with no field-level merge and resolves on `m` alone, so a device
+   on an older build merely logging a snack would destroy any new field and the
+   day would then be silently re-stamped wrong. Merged-in and fresh-install
+   days never pass through the migration chain either, so a migration could not
+   reach them. Inverting reaches all of them, on the first render.
+
+   Solved by bisection against plannedTefRate itself rather than by the closed
+   form, because the closed form is valid only on the unclamped branch.
+   Bisecting the real function stays exact through both clamps and through the
+   600 floor, and stays correct if the TEF model is ever changed again. */
+var _fnCache = {};
+function invalidateFrozen(){ _fnCache = {}; }
+function frozenNet(t){
+  if(!(t > 0)) return 0;
+  var key = t + "|" + (+S.profile.proteinTarget || 0);
+  if(_fnCache[key] !== undefined) return _fnCache[key];
+  var lo = 0, hi = t + 1000, mid;
+  for(var i=0;i<40;i++){
+    mid = (lo + hi)/2;
+    if(mid / (1 - plannedTefRate(Math.max(600, mid))) < t) lo = mid; else hi = mid;
+  }
+  _fnCache[key] = (lo + hi)/2;
+  return _fnCache[key];
+}
+function frozenBase(t, def){ return frozenNet(t) + Math.max(0, +def || 0); }
+
+/* One evaluation of the movement model, BEFORE calibration. Only ever used in
+   PAIRS across a single edit, so every term the two share cancels: the profile
+   fields, strideM, walkFactor, compFactor, metIdle, neatSlope, wakingHours,
+   gymKcal, the football constants, calFactor — and critically
+   habitualSteps(), the 28-day median anchored on `today`, which otherwise moves
+   a frozen day's base with no edit to that day at all. Only the edit survives
+   the subtraction. */
+function rawBase(d){
+  var np = neatParts(d);
+  return bmrAt(d) + np.idle + np.walk + gymKcalFor(d) + (np.fb ? np.fb.credited : 0);
+}
+
 function burn(d, raw){
   var P=S.profile, x=peek(d)||{};
   var np    = neatParts(d);
@@ -1383,11 +1525,30 @@ function burn(d, raw){
   var fbCal = fb ? fb.credited : 0;
 
   var cal  = raw ? 1 : calFactor();                 // measured correction
-  var base = (bmr + neat + walk + gym + fbCal) * cal;   // everything except TEF
+  var live = (bmr + neat + walk + gym + fbCal) * cal;   // what TODAY'S model makes of it
 
   var e   = eaten(d);
   var def = deficitFor(d);
   var tefEarned = tefOf(e);                         // ACTUAL, from the plate
+
+  /* A past day that recorded a target is priced at the base that target was
+     solved from, recovered by inversion. Without this, `base` moved with every
+     later change to the model — a Setup field, the measured correction, the
+     habitual-step median drifting as days roll out — while `target` stayed
+     frozen, so the card printed "Burn 2589 − deficit 0 = eat 2400" and meant it.
+
+     `raw` deliberately bypasses this: computeCalibration is measuring the LIVE
+     model against the scale, and feeding it frozen bases — which already carry
+     the calibration factor in force when they were stamped — closes a feedback
+     loop that drives the factor to 1 and then oscillates. backfillTargets
+     wants the live figure too.
+
+     x.deficit must be recorded as well: without it deficitFor falls through to
+     the live planDeficit, and the recovered base would move with the plan. */
+  var frozen = (!raw && d !== today && x &&
+                typeof x.target === "number" && x.target > 0 &&
+                x.deficit !== undefined) ? x.target : null;
+  var base = frozen !== null ? frozenBase(frozen, def) : live;
 
   /* TEF depends on intake and intake depends on TEF, so the target is solved
      rather than iterated:
@@ -1408,26 +1569,47 @@ function burn(d, raw){
   /* targetLive is what the CURRENT model would ask for. target is what the day
      actually asked — the same thing for today, and the frozen record for any
      day already gone. Everything that judges adherence must use the latter. */
-  var targetLive = Math.max(0, (base - def) / (1 - r));
-  var frozen = (d !== today && x && typeof x.target === "number" && x.target > 0)
-             ? x.target : null;
+  var targetLive = Math.max(0, (live - def) / (1 - plannedTefRate(Math.max(600, live - def))));
   var target = frozen !== null ? frozen : targetLive;
   var tefPlanned = r * target;
   var tefLeft    = r * Math.max(0, target - e.k);
   var tefNow     = tefEarned + tefLeft;
 
-  return { bmr:bmr, neat:neat*cal, steps:walk*cal, gym:gym*cal, football:fbCal*cal,
+  /* The itemisation has to sum to `base` or the card contradicts its own
+     headline. Resting is left EXACT, because it is the one row with a printed
+     derivation underneath it ("Mifflin-St Jeor at 90.60 kg") and a scaled
+     figure under that sentence would be a new lie. The residual is carried by
+     the movement rows, which is also where drift actually comes from. If there
+     is almost no movement to carry it, everything scales together instead.
+     NOTE bmr was returned UNSCALED by cal while base has always included
+     bmr*cal — a pre-existing mismatch that made the composition bar and PAL
+     under-count resting whenever the measured correction was on. */
+  var bmrShown = bmr * cal, mvLive = (neat + walk + gym + fbCal) * cal;
+  var kb = 1, km = 1;
+  if(frozen !== null && live > 0){
+    if(mvLive > 50 && base > bmrShown) km = (base - bmrShown)/mvLive;
+    else kb = km = base/live;
+    if(!(km > 0) || !isFinite(km)){ kb = 1; km = 1; }
+  }
+
+  return { bmr:bmrShown*kb, neat:neat*cal*km, steps:walk*cal*km,
+           gym:gym*cal*km, football:fbCal*cal*km,
            fb:fb, base:base, target:target, deficit:def, eaten:e,
            tef:tefNow, tefEarned:tefEarned, tefLeft:tefLeft,
            tefPlanned:tefPlanned, tefRate:r,
            targetLive:targetLive, targetFrozen:frozen,
-           /* total is the projection the target was built from, so
-              total − deficit === target always holds on screen. */
+           /* total − deficit === target is now true BY CONSTRUCTION on both
+              paths. Frozen: base − def === frozenNet(target) === target·(1−r),
+              so total = target·(1−r) + def + r·target = target + def.
+              Live: base === live, and r is the r targetLive was solved with. */
            total:base + tefPlanned,
            /* actual is what you really burned, on the food really logged. */
            actual:base + tefEarned,
+           /* how far today's model has walked away from this day's own price.
+              Zero for today and for any day not yet frozen. */
+           drift: frozen !== null ? (live - base) : 0, itemScale: km,
            cal:cal, tefActual:tefEarned, np:np,
-           pal: bmr>0 ? (base + tefPlanned)/bmr : 0 };
+           pal: (bmrShown*kb) > 0 ? (base + tefPlanned)/(bmrShown*kb) : 0 };
 }
 
 /* Formulas get you close; the scale settles it. Once there's enough history,
@@ -1449,14 +1631,56 @@ function computeCalibration(){
      has n=1 — a single raw morning weight — so anchoring to it was measuring
      one day's water balance and calling it a fortnight of progress. */
   if(last.n < 4) return false;
-  for(var i=0;i<ma.length;i++) if(ma[i].n >= 4 && dayDiff(last.d, ma[i].d) >= 14) first = ma[i];
+  /* WINDOW LENGTH. This loop had no `break`, so `first` was overwritten on
+     every qualifying point and the LAST one won — it selected the SHORTEST
+     legal window, ~14 days, and threw the rest of the history away. That is
+     backwards, and expensively so: the estimate is dominated by scale noise at
+     both ends, and its standard error falls roughly as 4400/(span — 7) kcal/day
+     — about ±630 at 14 days, ±315 at 21, ±210 at 28. A fortnight is not a weak
+     signal, it is noise: ±630 is wider than the entire 800 deficit it is trying
+     to measure.
+
+     So take the LONGEST window available instead, capped at CAL_MAX_SPAN. Two
+     reasons for the cap rather than "all of it". First, `modeled` reconstructs
+     each day with TODAY'S profile and today's 28-day habitual-step median, so
+     beyond about four weeks it is pricing days with a baseline that never
+     applied to them. Second, a window mean estimates your burn at the window's
+     MIDPOINT, and you are lighter now than you were then — the longer the
+     window, the staler the answer.
+
+     Snapped to whole weeks because bodyweight has a real weekly rhythm (up at
+     the weekend, down midweek), so a 30-day window carries a weekday-
+     composition bias that a 28-day one does not. */
+  var CAL_MAX_SPAN = 28, CAL_MIN_SPAN = 14;
+  for(var i=0;i<ma.length;i++){
+    var gap = dayDiff(last.d, ma[i].d);
+    if(ma[i].n >= 4 && gap >= CAL_MIN_SPAN && gap <= CAL_MAX_SPAN){ first = ma[i]; break; }
+  }
+  /* Nothing inside the cap: fall back to the shortest window past the minimum,
+     which is the old behaviour and still better than refusing to answer. */
+  if(!first)
+    for(var j=0;j<ma.length;j++)
+      if(ma[j].n >= 4 && dayDiff(last.d, ma[j].d) >= CAL_MIN_SPAN) first = ma[j];
   if(!first) return false;
   var span = dayDiff(last.d, first.d);
+  /* Snap to a whole number of weeks by walking `first` forward, never back
+     past the minimum. */
+  if(span > CAL_MIN_SPAN && span % 7){
+    var want = Math.max(CAL_MIN_SPAN, span - (span % 7));
+    for(var w=0;w<ma.length;w++)
+      if(ma[w].n >= 4 && dayDiff(last.d, ma[w].d) >= want &&
+         dayDiff(last.d, ma[w].d) < span){ first = ma[w]; break; }
+    span = dayDiff(last.d, first.d);
+  }
 
   var logged = [], k = first.d;
   while(k <= last.d){
     var x = S.days[k];
-    if(x && x.entries && x.entries.length) logged.push(k);
+    /* A deliberate maintenance stretch is where this estimator is least able
+       to tell fat from water, and a window made entirely of zero-deficit days
+       switches the whole sanity guard off (every arm of it is gated on
+       plannedPerDay > 0) while still computing and applying a factor. */
+    if(x && x.entries && x.entries.length && !x.mx) logged.push(k);
     k = shift(k, 1);
   }
   // needs most of the window actually logged, or the average intake is fiction
@@ -1515,8 +1739,27 @@ function computeCalibration(){
   var suspect = plannedPerDay > 0 &&
                 (frontLoaded || ratio > 2.0 || ratio < -0.5);
 
+  /* SHRINKAGE. The raw factor is a ratio of two noisy numbers, and applying it
+     whole means a fortnight of water decides what you eat for the next month.
+     So weight it by how much it actually knows: with a sampling error of about
+     SE = 4400/(span — 7) kcal/day and a prior spread of about TAU on the model
+     itself (Mifflin lands within 10% on maybe three adults in four, and the
+     activity guess is looser still),
+
+         lambda = TAU\u00b2 / (TAU\u00b2 + SE\u00b2),    applied = 1 + lambda·(factor — 1)
+
+     which is the ordinary shrinkage weight. At 14 days lambda is about 0.15,
+     so a wild reading barely moves your targets; at 28 days it is about 0.6;
+     given a long clean run it approaches 1. The estimate degrades gracefully
+     instead of lurching, and a longer window is now worth something concrete
+     rather than just feeling better. */
+  var SE = 4400 / Math.max(1, span - 7), TAU = 260;
+  var lambda = (TAU*TAU) / (TAU*TAU + SE*SE);
+  var shrunk = 1 + lambda * (factor - 1);
+
   return { intake:intake, modeled:modeled, trueTDEE:trueTDEE, factor:factor,
-           clamped: Math.max(0.85, Math.min(1.15, factor)),
+           shrunk:shrunk, lambda:lambda, se:SE,
+           clamped: Math.max(0.85, Math.min(1.15, shrunk)),
            days:logged.length, span:span, coverage: logged.length/(span+1),
            kgPerDay:kgPerDay, plannedPerDay:plannedPerDay, ratio:ratio,
            suspect:suspect, frontLoaded:frontLoaded, r1:r1, r2:r2,
@@ -1525,7 +1768,12 @@ function computeCalibration(){
 function calFactor(){
   if(!S.profile.calibrate) return 1;
   var c = calibration();
-  return c ? c.clamped : 1;
+  /* `suspect` used to be cosmetic: it greyed out a pill and changed nothing.
+     So a correction switched on during a clean window kept multiplying every
+     target by a water-contaminated factor once the window went bad — which is
+     precisely the failure the flag exists to prevent. A window this page
+     refuses to report is a window it must not apply either. */
+  return (c && !c.suspect) ? c.clamped : 1;
 }
 function eaten(d){
   var x=peek(d), t={k:0,p:0,c:0,f:0};
@@ -2030,6 +2278,26 @@ function paintPane(pane, d, sp, instant){
     (target<1500?' <span class="pill o">low day</span>':'')+
     '<div class="t-cap" style="color:var(--label3);margin-top:3px">'+deficitWhy(d)+'</div>';
 
+  /* A past day is priced at its own numbers, so today's model and this day's
+     record can disagree. Say by how much rather than quietly showing one of
+     them: the gap is settings that changed since, and it is not this day's. */
+  var dr = pane.querySelector(".js-drift");
+  if(dr){
+    var showDr = d !== today && Math.abs(b.drift) > 25;
+    dr.style.display = showDr ? "" : "none";
+    if(showDr) dr.innerHTML = 'Priced at this day\u2019s own numbers. Today\u2019s model would '+
+      'make it '+Math.round(b.total + b.drift)+' \u2014 the '+Math.round(Math.abs(b.drift))+
+      ' kcal between them is settings that changed since, and it does not belong '+
+      'to this day.';
+  }
+  var mxb = pane.querySelector(".js-mx");
+  if(mxb){
+    var marked = !!(peek(d) && peek(d).mx);
+    mxb.style.display = (d === today || !dayHasContent(peek(d))) ? "none" : "";
+    mxb.textContent = marked ? "Counted as maintenance · undo" : "Not a deficit day";
+    mxb.setAttribute("onclick", "setMx('"+d+"',"+(marked?"false":"true")+")");
+  }
+
   var ac = pane.querySelector(".js-actual");
   if(ac){
     if(e.k <= 0){
@@ -2050,10 +2318,20 @@ function paintPane(pane, d, sp, instant){
 /* Where the day's deficit came from, in words — so a number that changes on
    its own is never mysterious. */
 function deficitWhy(d){
-  var x = peek(d);
-  if(x && x.deficit !== undefined && d !== today)
-    return "Locked at "+Math.round(x.deficit)+" \u2014 the deficit that was in force that day.";
-  var win = planWindowFor(d);
+  var x = peek(d), win = planWindowFor(d);
+  if(x && x.deficit !== undefined && d !== today){
+    /* The window branch used to sit BELOW this early return, so every past
+       maintenance day read a bare "Locked at 0" with nothing connecting it to
+       the window you created. */
+    var s = win
+      ? "Maintenance window" + (win.label ? " ("+esc(win.label)+")" : "") +
+        " · deficit locked at "+Math.round(x.deficit)+" that day."
+      : "Locked at "+Math.round(x.deficit)+" \u2014 the deficit that was in force that day.";
+    if(x.mx) s += " Marked maintenance: left out of adherence.";
+    if(_lastRebase && _lastRebase.d === d)
+      s += ' <a data-press style="color:var(--accent)" onclick="undoRebase()">undo the re-price</a>';
+    return s;
+  }
   if(win) return "Maintenance window" + (win.label ? " ("+esc(win.label)+")" : "") + ".";
   if(!S.plan || S.plan.mode !== "auto") return "Set by hand in Setup.";
   var tw = trendWeightAt(d), b = planBandFor(tw);
@@ -2244,6 +2522,9 @@ function viewToday(d){
         '<span class="qt js-eatenq"></span></div>'+
     '</div></div>'+
     '<div class="note js-burnline" style="border-top:.5px solid var(--sep)"></div>'+
+    '<div class="note js-drift" style="display:none;padding-top:0;color:var(--label3)"></div>'+
+    '<div style="padding:0 16px 13px"><a class="t-cap js-mx" data-press '+
+      'style="display:none;color:var(--accent)"></a></div>'+
   '</div>';
 
   h += '<div class="sectionhead"><h2 class="t-section">Add food</h2>'+
@@ -2756,7 +3037,10 @@ function calibrationSection(){
       'regular weigh-ins.<br>Then this works out what you actually burn, rather than what the '+
       'formulas guess.</div></div>';
   }
-  var off = (c.factor - 1) * 100;
+  /* Quote the factor that is actually APPLIED. The pill used to print the raw
+     ratio while the button six lines below applied the clamped, shrunk one, so
+     the card could say "under by 22%" and then correct by 15%. */
+  var off = (c.clamped - 1) * 100, raw = (c.factor - 1) * 100;
   var pill = c.suspect
     ? '<span class="pill r">this window is not usable</span>'
     : Math.abs(off) < 4 ? '<span class="pill g">model is within '+Math.abs(Math.round(off))+'%</span>'
@@ -2765,7 +3049,15 @@ function calibrationSection(){
 
   if(c.suspect){
     /* Wait until the whole window sits after the swing. */
-    var clean = shift(c.to, 15);
+    /* This was shift(c.to, 15), and c.to is the NEWEST weigh-in — so the date
+       promised was always ~15 days from now and moved away from you at exactly
+       the rate you approached it. What actually has to happen is that the
+       START of the window clears the drop, so count from the drop, not from
+       today: the window is `span` long, so the first clean window begins
+       `span` days after the last front-loaded stretch ended — which is
+       c.from + span + the half-window that is still contaminated. */
+    var clean = shift(c.from, Math.round(c.span * 1.5) + 1);
+    if(clean <= today) clean = shift(today, 1);
     return h +
       '<div class="kv"><span>Scale says you lost</span><span>'+n1(c.kgPerDay*7)+' kg/wk</span></div>'+
       '<div class="kv"><span>Your deficits allow</span><span>'+n1(c.plannedPerDay*7)+' kg/wk</span></div>'+
@@ -2787,7 +3079,7 @@ function calibrationSection(){
           'would conclude you burn far more than you do and offer you more food on the strength '+
           'of water that has already gone.'+
           '<br><br>Nothing is wrong with your logging. It clears itself: once the whole '+
-          '14-day window sits after the drop, around <b>'+
+          c.span+'-day window sits after the drop, around <b>'+
           new Date(clean+"T12:00").toLocaleDateString(undefined,{day:"numeric",month:"long"})+
           '</b>, this page starts telling you something real.'+
         '</div>'+
@@ -2802,12 +3094,22 @@ function calibrationSection(){
     '<div style="padding:12px 16px;border-top:.5px solid var(--sep)">'+
       '<div style="margin-bottom:7px">'+pill+'</div>'+
       '<div class="t-sub" style="color:var(--label2);line-height:1.5">'+
-        'Worked back from '+c.days+' logged days across '+c.span+' days of weigh-ins: what you ate, '+
+        /* span is an interval; the window covers span+1 calendar days, which is
+           what c.days counts. Reporting the interval made "29 logged days
+           across 28 days" read like an arithmetic slip. */
+        'Worked back from '+c.days+' logged days across '+(c.span+1)+' days of weigh-ins: what you ate, '+
         'plus the energy in the weight that came off. '+
         (Math.abs(off) < 4
           ? 'That\'s close enough that the model is doing its job — no correction needed.'
           : 'Turning the correction on multiplies your burn by ×'+n1(c.clamped)+
             ', so your daily target follows what your body actually does instead of the formulas.')+
+        '<br><br>Over '+c.span+' days the scale noise alone is worth about \u00b1'+
+        Math.round(c.se)+' kcal/day, so this reading is only worth so much on its own. '+
+        'It is blended with the model at '+Math.round(c.lambda*100)+'%'+
+        (c.span < 28 ? ' \u2014 the weight it earns at this window length, and it rises '+
+          'as your history gets longer' : '')+
+        ': the raw arithmetic says '+(raw>0?'+':'')+Math.round(raw)+'%, and '+
+        (off>0?'+':'')+Math.round(off)+'% is what actually gets applied.'+
       '</div>'+
       '<div style="margin-top:11px"><button class="btn '+(on?'danger':'sec')+' ctl" data-press '+
         'onclick="toggleCal()">'+(on?'Turn the correction off':'Apply this correction')+'</button></div>'+
@@ -2874,6 +3176,12 @@ function waistSection(wr){
 function ratePill(rate){
   var tr = targetRate();
   var t = n1(rate)+" kg/week";
+  if(tr.hold){
+    /* During a pause "gaining" is not a failure and "faster" is meaningless. */
+    if(rate >= tr.low && rate <= tr.high)
+      return '<span class="pill g">'+(Math.abs(rate) < 0.05 ? "holding" : t+' · holding')+'</span>';
+    return '<span class="pill o">'+t+' · more than a pause should move</span>';
+  }
   if(rate < 0) return '<span class="pill r">gaining '+n1(-rate)+' kg/week</span>';
   if(rate < tr.low)  return '<span class="pill o">'+t+' · slower than the '+n1(tr.mid)+' this deficit implies</span>';
   if(rate > tr.high) return '<span class="pill o">'+t+' · faster than the '+n1(tr.mid)+' this deficit implies</span>';
@@ -2884,8 +3192,23 @@ function adviceCard(wr, P){
   var rate = wr.rate, mid = tr.mid;
   var adj = -(rate - mid) * 7700 / 7;
   adj = Math.max(-300, Math.min(300, Math.round(adj/25)*25));
-  var msg;
-  if(rate >= tr.low && rate <= tr.high){
+  var msg, win = planWindowFor(today);
+  if(tr.hold){
+    /* Eating at maintenance IS the instruction. There is nothing to correct
+       toward, so this card must not hand out an adjustment. */
+    var label = win && win.label ? win.label : "this pause";
+    msg = (rate >= tr.low && rate <= tr.high)
+      ? "You are eating at maintenance for "+esc(label)+", so a flat scale is the plan "+
+        "working, not stalling. What movement there is over a week like this is water "+
+        "and gut content — glycogen refills once you stop running a deficit, which "+
+        "shows up as a kilo that is not fat and comes off again by itself. Nothing to "+
+        "change. Keep logging so the days still count."
+      : "You are on maintenance for "+esc(label)+", and the scale has moved "+
+        n1(Math.abs(rate))+" kg/week "+(rate > 0 ? "down" : "up")+" — more than a pause "+
+        "should move. That is usually the last of a deficit still landing, or a change "+
+        "in carbs and salt rather than in fat. Don\u2019t chase it: hold the maintenance "+
+        "target and let the next phase judge it.";
+  } else if(rate >= tr.low && rate <= tr.high){
     msg = "You're inside your target band. Don't change anything — the numbers you're using are working, "+
       "whatever the individual parts say.";
   } else if(rate < tr.low){
@@ -3023,11 +3346,20 @@ function planSection(){
    matters far less than a fortnight of quietly eating 250 over. */
 function adherenceSection(){
   var n = 0, intake = 0, tgt = 0, prot = 0, defActual = 0, defPlanned = 0, over = 0, under = 0;
-  var skipped = 0, logged = 0, rows = [];
-  for(var i=1;i<=14;i++){
+  var skipped = 0, logged = 0, rows = [], excused = 0;
+  /* 28 days rather than 14. The daily spread of (ate \u2212 asked) is around 500
+     kcal, so a fortnight's mean carries about \u00b1130 kcal/day of pure sampling
+     noise and a month about \u00b195 \u2014 and this number is read as if it were exact.
+     Four whole weeks also cancels the weekday pattern instead of half-counting
+     it. Days that predate the recorded target are still skipped, so a longer
+     window only bites once there is history to fill it. */
+  var ADHERE_DAYS = 28;
+  for(var i=1;i<=ADHERE_DAYS;i++){
     var d = shift(today,-i), x = peek(d);
     if(!x || !x.entries || !x.entries.length) continue;
     logged++;
+    /* A day you deliberately ate at maintenance is not an adherence failure. */
+    if(x.mx){ excused++; continue; }
     /* Only days that RECORDED a target can be judged against one. A day
        logged before targets were frozen has no honest figure to compare
        with, and recomputing one with today's model is exactly the mistake
@@ -3096,7 +3428,9 @@ function adherenceSection(){
       '<div style="margin-bottom:7px">'+pill+'</div>'+
       '<div class="t-sub" style="color:var(--label2);line-height:1.5">'+msg+'</div>'+
       '<div class="t-cap" style="color:var(--label3);margin-top:9px">From '+n+
-        ' day'+(n===1?'':'s')+' in the last 14 that recorded a target.</div>'+
+        ' day'+(n===1?'':'s')+' in the last '+ADHERE_DAYS+' that recorded a target'+
+        (excused ? ', and '+excused+' more marked maintenance and left out on purpose' : '')+
+        '.</div>'+
     '</div>'+skipNote+'</div>';
 }
 /* preserveAspectRatio="none" was stretching the chart to the pane width, which
@@ -3166,7 +3500,12 @@ function chartSVG(ma){
 }
 function ledger(){
   var h="", tot=0, cnt=0, plan=0, foodDays=0;
-  for(var i=6;i>=0;i--){
+  /* The last seven COMPLETE days. This used to start at i=0 and include today,
+     so at nine in the morning a day with nothing logged yet contributed its
+     whole burn as a 2,000 kcal "real deficit" and the total read like a
+     triumph until the evening took it back. adherenceSection has always
+     started at 1 for exactly this reason. */
+  for(var i=7;i>=1;i--){
     var d = shift(today,-i), x = peek(d);
     if(!x) continue;
     var b=burn(d), e=b.eaten;
@@ -3175,13 +3514,14 @@ function ledger(){
        day even when you'd eaten 400 short of it, which inflated the deficit
        on precisely the days you were strictest. */
     var def = e.k ? (b.actual - e.k) : b.actual;
-    if(e.k){ tot += def; plan += b.deficit; foodDays++; }
+    if(e.k && !x.mx){ tot += def; plan += b.deficit; foodDays++; }
     cnt++;
     h += '<div class="kv"><span>'+new Date(d+"T12:00").toLocaleDateString(undefined,{weekday:"short"})+
       (e.k?'':' <span style="color:var(--label3)">(no food)</span>')+
       '<br><span class="t-cap" style="color:var(--label3)">'+
       (e.k?Math.round(e.k)+' eaten \u00b7 '+Math.round(b.actual)+' out \u00b7 '+
-           Math.round(b.deficit)+' planned':'burn only')+'</span></span><span>'+
+           Math.round(b.deficit)+' planned':'burn only')+
+      (x.mx?' \u00b7 maintenance':'')+'</span></span><span>'+
       (def>=0?"\u2212":"+")+Math.abs(Math.round(def))+'</span></div>';
   }
   if(!cnt) return '<div class="empty">Nothing logged in the last 7 days.</div>';
@@ -3476,8 +3816,62 @@ function addWindow(){
   if(b < a){ var t=a; a=b; b=t; }
   S.plan.windows.push({from:a, to:b, deficit:0, label:l || "Maintenance"});
   S.pm = Date.now(); save(); render(); toast("Window added");
+  applyWindowToPast(a, b, true);
 }
-function rmWindow(i){ S.plan.windows.splice(i,1); S.pm = Date.now(); save(); render(); }
+function rmWindow(i){
+  var w = S.plan.windows[i];
+  S.plan.windows.splice(i,1); S.pm = Date.now(); save(); render();
+  if(w) applyWindowToPast(w.from, w.to, false);
+}
+/* A window used to change nothing at all in the past, while the Setup copy
+   promised that days inside one are not counted as missed. Worse, it was
+   ASYMMETRIC: a past day with content kept its frozen deficit, but a past day
+   with no record yet fell through to the live plan, so backfilling food onto
+   it later froze a 0. The same window produced opposite answers on two days
+   depending only on the order you logged them, and removing it undid neither.
+
+   The rule: the app may never un-ask what it already asked. A day with food
+   keeps its recorded target and its frozen deficit and is MARKED instead \u2014
+   the mark changes whether the day is graded, not what it was worth. A day
+   with no food has no ate-versus-asked record to falsify, so nothing can be
+   invented by re-stamping it properly. */
+function applyWindowToPast(from, to, adding){
+  var judged = [], blank = [], n = 0;
+  Object.keys(S.days).forEach(function(k){
+    if(k >= today || k < from || k > to) return;
+    var x = S.days[k];
+    if(!dayHasContent(x)) return;
+    if(x.entries && x.entries.length) judged.push(k); else blank.push(k);
+  });
+  blank.forEach(function(k){
+    var x = S.days[k];
+    x.deficit = planDeficit(k);
+    delete x.target; stampTarget(k);
+    x.m = Date.now(); n++;
+  });
+  judged = judged.filter(function(k){ return !!S.days[k].mx !== adding; });
+  if(n && !judged.length){ save(); render(); }
+  if(!judged.length) return;
+  sheet('<b>'+judged.length+' day'+(judged.length===1?'':'s')+' inside this range '+
+    (judged.length===1?'has':'have')+' food logged already.</b><br>'+
+    '<div style="margin-top:8px;opacity:.85">'+(adding
+      ? 'Mark '+(judged.length===1?'it':'them')+' maintenance? What '+
+        (judged.length===1?'it':'they')+' asked you to eat at the time stays exactly '+
+        'as it was \u2014 this only stops '+(judged.length===1?'it':'them')+' being judged '+
+        'as missed.'
+      : 'Un-mark '+(judged.length===1?'it':'them')+'? '+(judged.length===1?'It goes':'They go')+
+        ' back into your adherence average.')+'</div>',
+    adding ? "Mark them" : "Un-mark them",
+    function(){
+      judged.forEach(function(k){
+        if(adding) S.days[k].mx = 1; else delete S.days[k].mx;
+        S.days[k].m = Date.now();
+      });
+      save(); render();
+      toast(judged.length+' day'+(judged.length===1?'':'s')+
+            (adding?' marked maintenance':' back in the average'));
+    });
+}
 /* Toggles the itemisation, on every pane at once (the neighbouring days are
    real DOM too, so leaving them out of step would show through on a swipe). */
 function toggleBurn(btn){
@@ -3511,15 +3905,21 @@ function setP(k,v){
   else if(view==="football") syncFootball();
 }
 function setDay(k,v){
-  var x=touch(cur);
-  x[k] = (k==="gym") ? !!v : (parseFloat(String(v).replace(",","."))||0);
-  invalidateHab(); save(); syncToday();
+  /* No invalidateHab() here: save() already does it, and running it between
+     editDay's two evaluations would stop the habitual median cancelling. */
+  editDay(cur, function(){
+    var x=touch(cur);
+    x[k] = (k==="gym") ? !!v : (parseFloat(String(v).replace(",","."))||0);
+  });
+  save(); syncToday();
 }
 function setWeight(v){
   var w = parseFloat(String(v).replace(",","."));
-  S.weights = S.weights.filter(function(q){ return q.d!==cur; });
-  if(!isNaN(w) && w>0) S.weights.push({d:cur, w:w, m:Date.now()});
-  invalidateMA(); save(); syncToday();
+  editWeight(cur, function(){                      // editWeight owns invalidateMA
+    S.weights = S.weights.filter(function(q){ return q.d!==cur; });
+    if(!isNaN(w) && w>0) S.weights.push({d:cur, w:w, m:Date.now()});
+  });
+  save(); syncToday();
 }
 function setWaist(v){
   var c = parseFloat(String(v).replace(",","."));
@@ -3528,8 +3928,10 @@ function setWaist(v){
   save();
 }
 function rmWeight(d){
-  S.weights = S.weights.filter(function(q){ return q.d!==d; });
-  invalidateMA(); save(); render();
+  editWeight(d, function(){
+    S.weights = S.weights.filter(function(q){ return q.d!==d; });
+  });
+  save(); render();
 }
 function rmEntry(i){
   touch(cur).entries.splice(i,1); save(); refreshEntries(); haptic(10);
@@ -3562,29 +3964,38 @@ function addFromLib(id){
 function rmFood(id){ S.foods = S.foods.filter(function(q){ return q.id!==id; }); save(); renderFoodList(); renderRecents(); }
 
 function setFb(k,v){
-  var x=touch(cur);
-  if(!x.football) x.football = {mode:"avg", mins:120, hr:140, steps:0, z:{light:0,fat:0,cardio:0,peak:0}};
-  if(!x.football.z) x.football.z = {light:0,fat:0,cardio:0,peak:0};
-  x.football[k] = (k==="mode") ? v : (parseFloat(String(v).replace(",","."))||0);
+  editDay(cur, function(){
+    var x=touch(cur);
+    if(!x.football) x.football = {mode:"avg", mins:120, hr:140, steps:0, z:{light:0,fat:0,cardio:0,peak:0}};
+    if(!x.football.z) x.football.z = {light:0,fat:0,cardio:0,peak:0};
+    x.football[k] = (k==="mode") ? v : (parseFloat(String(v).replace(",","."))||0);
+  });
   save();
   if(k==="mode"){ fbMode = v; render(); positionSeg(true); haptic(6); }
   else syncFootball();
 }
 function setZ(k,v){
-  var x=touch(cur);
-  if(!x.football) x.football = {mode:"zones", mins:0, hr:0, steps:0, z:{light:0,fat:0,cardio:0,peak:0}};
-  if(!x.football.z) x.football.z = {light:0,fat:0,cardio:0,peak:0};
-  x.football.z[k] = parseFloat(String(v).replace(",","."))||0;
+  editDay(cur, function(){
+    var x=touch(cur);
+    if(!x.football) x.football = {mode:"zones", mins:0, hr:0, steps:0, z:{light:0,fat:0,cardio:0,peak:0}};
+    if(!x.football.z) x.football.z = {light:0,fat:0,cardio:0,peak:0};
+    x.football.z[k] = parseFloat(String(v).replace(",","."))||0;
+  });
   save(); syncFootball();
 }
 function preset(mins,hr){
-  var x=touch(cur);
-  x.football = {mode:"avg", mins:mins, hr:hr, steps:(x.football&&x.football.steps)||0,
-                z:{light:0,fat:0,cardio:0,peak:0}};
+  editDay(cur, function(){
+    var x=touch(cur);
+    x.football = {mode:"avg", mins:mins, hr:hr, steps:(x.football&&x.football.steps)||0,
+                  z:{light:0,fat:0,cardio:0,peak:0}};
+  });
   save(); render(); haptic(8); toast("Preset loaded");
 }
 function saveFb(){ save(); nav("today"); toast("Session saved"); }
-function clearFb(){ touch(cur).football = null; save(); render(); toast("Session removed"); }
+function clearFb(){
+  editDay(cur, function(){ touch(cur).football = null; });
+  save(); render(); toast("Session removed");
+}
 
 function copyDay(){
   var b=burn(cur), e=b.eaten, x=peek(cur)||{entries:[]};
