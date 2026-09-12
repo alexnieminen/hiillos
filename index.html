@@ -669,10 +669,18 @@ function habitualSteps(){
     var x = S.days[shift(today,-i)];
     if(x && +x.steps > 0) v.push(+x.steps);
   }
-  if(v.length < 5){ _habCache = Math.max(0, +S.profile.stepsRef || 3500); return _habCache; }
+  var ref = Math.max(0, +S.profile.stepsRef || 3500);
+  if(!v.length){ _habCache = ref; return _habCache; }
   v.sort(function(a,b){ return a-b; });
   var m = v.length % 2 ? v[(v.length-1)/2] : (v[v.length/2-1]+v[v.length/2])/2;
-  _habCache = m;
+  /* Below five recorded step-days this used to discard the measurement
+     entirely and snap to the typed anchor. On a 10,000-step day that is a jump
+     from a ~9,500 habit to 3,500, which re-prices 6,000 steps from full credit
+     to the compensated rate and moves the day by ~50 kcal \u2014 a cliff triggered
+     by nothing more than forgetting to log steps for a few days. Fade between
+     the two instead, so missing data costs confidence rather than accuracy. */
+  var conf = Math.min(1, v.length / 5);
+  _habCache = conf * m + (1 - conf) * ref;
   return _habCache;
 }
 
@@ -1163,6 +1171,15 @@ function trendWeightAt(d){
   return n ? s/n : arr[arr.length-1].w;
 }
 
+/* Days since the most recent weigh-in on or before d, or 0 if there is one
+   inside the trend window. Used wherever a stale trend weight would quietly
+   drive a decision. */
+function weighStaleness(d){
+  var dd = d || today, arr = sortedWeights(), last = null;
+  for(var i=arr.length-1;i>=0;i--) if(arr[i].d <= dd){ last = arr[i]; break; }
+  if(!last) return 999;
+  return Math.max(0, dayDiff(dd, last.d));
+}
 function planWindowFor(d){
   var ws = (S.plan && S.plan.windows) || [];
   for(var i=0;i<ws.length;i++){
@@ -2000,7 +2017,13 @@ function weeklyRate(){
   });
   if(!best || best.d === last.d) return null;
   var span = dayDiff(last.d, best.d);
-  if(span < 3) return null;
+  /* The two ends are 7-day means, each carrying ~0.19 kg of noise, so their
+     difference carries ~0.27 kg. Dividing that by the span and multiplying by
+     7 AMPLIFIES it whenever the span is short: at 3 days the reported rate
+     carries 0.63 kg/week of pure noise \u2014 wider than the rate itself \u2014 and
+     adviceCard then hands out a 300 kcal correction on the strength of it.
+     Five days caps the amplification at 1.4x. */
+  if(span < 5) return null;
   return {rate:(best.avg - last.avg) / span * 7, span:span, from:best, to:last, points:arr.length};
 }
 function dayDiff(a,b){
@@ -2395,7 +2418,14 @@ function deficitWhy(d){
   if(!S.plan || S.plan.mode !== "auto") return "Set by hand in Setup.";
   var tw = trendWeightAt(d), b = planBandFor(tw);
   var idx = (S.plan.bands||[]).indexOf(b);
-  return b ? ("Plan phase "+bandLabel(idx)+", from a trend weight of "+nw(tw)+" kg.")
+  /* trendWeightAt averages the 7 days up to d and, failing that, falls back to
+     the most recent reading of ANY age. That fallback is silent, and the band
+     it picks sets the deficit \u2014 so a fortnight without the scale can hold you
+     in a phase you have already eaten your way out of. Say how old it is. */
+  var stale = weighStaleness(d);
+  return b ? ("Plan phase "+bandLabel(idx)+", from a trend weight of "+nw(tw)+" kg"+
+              (stale > 7 ? " \u2014 but your last weigh-in was "+stale+" days ago, so the "+
+               "phase is running on an old number" : "")+".")
            : "From your plan.";
 }
 /* A body-fat target expressed as a weight, as a RANGE — because the lean mass
@@ -3327,7 +3357,17 @@ function planForecast(){
     var rate = (+band.deficit || 0) * 7 / 7700;
     if(rate <= 0.01) break;
     var days = Math.round(drop / rate * 7);
-    var pause = pauseDaysBetween(d, shift(d, days));
+    /* Adding the pause pushes the phase's end out, and the days it moves into
+       can themselves be maintenance days \u2014 so counting once over the
+       UN-extended interval misses any window sitting in the extension. With an
+       8-day exam week straddling the boundary the forecast counted 4 of it and
+       every date downstream came out 4 days early. Iterate to a fixed point;
+       it converges in a step or two because each pass only ever adds days. */
+    var pause = pauseDaysBetween(d, shift(d, days)), prev = -1, settle = 0;
+    while(pause !== prev && settle++ < 20){
+      prev = pause;
+      pause = pauseDaysBetween(d, shift(d, days + pause));
+    }
     var end = shift(d, days + pause);
     out.push({label:bandLabel((S.plan.bands||[]).indexOf(band)), deficit:+band.deficit,
               rate:rate, from:w, to:floor, weeks:drop/rate, pause:pause, start:d, end:end});
@@ -3373,7 +3413,11 @@ function planSection(){
       esc(bandLabel((S.plan.bands||[]).indexOf(cur_b)))+'</div>'+
       '<div class="t-sub" style="color:var(--label2);line-height:1.5">'+
       'Deficit <b>'+Math.round(cur_b.deficit)+'</b> \u2192 about <b>'+n1(cur_b.deficit*7/7700)+
-      ' kg/week</b>. Trend weight '+nw(tw)+' kg.'+
+      ' kg/week</b>. Trend weight '+nw(tw)+' kg'+
+      (weighStaleness(today) > 7
+        ? ', though nothing has gone on the scale for '+weighStaleness(today)+
+          ' days \u2014 this phase is being chosen by a number that old'
+        : '')+'.'+
       (cc ? '<br>'+(
         cc.level === "over"
           ? '<b style="color:var(--bad)">'+Math.round(cc.by)+
