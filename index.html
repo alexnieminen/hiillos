@@ -3588,15 +3588,36 @@ function chartSVG(ma){
   if(max-min < 1){ var c=(max+min)/2; min=c-0.6; max=c+0.6; }
   var pd=(max-min)*0.12; min-=pd; max+=pd;
   var n=ma.length;
-  var X=function(i){ return padL + (W-padL-padR)*(n===1?0.5:i/(n-1)); };
+  /* X is a DATE axis, not a weigh-in index. Spacing by index drew a fortnight
+     with no weigh-ins exactly as wide as a single day, so a gap looked like
+     progress and the slope through it was a lie \u2014 and the two reference weeks
+     marked below would sit at the wrong place on the page. */
+  var t0 = ma[0].d, totalDays = Math.max(1, dayDiff(ma[n-1].d, t0));
+  var X=function(i){ return padL + (W-padL-padR) * (dayDiff(ma[i].d, t0) / totalDays); };
   var Y=function(v){ return padT + (H-padT-padB)*(1-(v-min)/(max-min)); };
 
-  var dots="", raw="", avg="";
+  /* With a real date axis the line has to admit where it is interpolating.
+     Anything over a 3-day hole is drawn faint and dashed: the dots are
+     measurements, the solid line joins measurements that are close enough to
+     join, and the dashed one is the app guessing across a hole. */
+  var dots="", avg="", segs=[], run="", GAPD=3;
   ma.forEach(function(p,i){
-    raw += (i?"L":"M")+X(i).toFixed(1)+","+Y(p.w).toFixed(1);
-    avg += (i?"L":"M")+X(i).toFixed(1)+","+Y(p.avg).toFixed(1);
-    dots += '<circle cx="'+X(i).toFixed(1)+'" cy="'+Y(p.w).toFixed(1)+'" r="2.4" fill="var(--label3)"/>';
+    var x=X(i).toFixed(1), y=Y(p.w).toFixed(1);
+    if(i && dayDiff(p.d, ma[i-1].d) > GAPD){
+      if(run) segs.push({d:run, gap:false});
+      segs.push({d:"M"+X(i-1).toFixed(1)+","+Y(ma[i-1].w).toFixed(1)+"L"+x+","+y, gap:true});
+      run = "M"+x+","+y;
+    } else {
+      run += (run?"L":"M")+x+","+y;
+    }
+    avg += (i?"L":"M")+x+","+Y(p.avg).toFixed(1);
+    dots += '<circle cx="'+x+'" cy="'+y+'" r="2.4" fill="var(--label3)"/>';
   });
+  if(run) segs.push({d:run, gap:false});
+  var raw = segs.map(function(sg){
+    return '<path d="'+sg.d+'" fill="none" stroke="var(--label3)" stroke-width="1.4" '+
+      'stroke-linejoin="round"'+(sg.gap?' stroke-dasharray="3 4" opacity=".45"':'')+'/>';
+  }).join("");
 
   /* horizontal gridlines at whole kilos, so the eye has something to measure
      against — a trend line floating in an unlabelled box says very little */
@@ -3673,10 +3694,9 @@ function chartSVG(ma){
     }
   }
   return '<svg class="chart" viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="xMidYMid meet" '+
-      'role="img" aria-label="Weight trend over '+n+' weigh-ins">'+
+      'role="img" aria-label="Weight trend over '+(totalDays+1)+' days, '+n+' weigh-ins">'+
     grid + marks + goalLine +
-    '<path d="'+raw+'" fill="none" stroke="var(--label3)" stroke-width="1.4" stroke-linejoin="round"/>'+
-    dots+
+    raw + dots+
     '<path d="'+avg+'" fill="none" stroke="var(--blue)" stroke-width="2.6" stroke-linecap="round" '+
       'stroke-linejoin="round"/>'+
     '<text x="'+padL+'" y="'+(H-7)+'" font-size="10.5" fill="var(--label3)">'+f(ma[0].d)+'</text>'+
