@@ -172,7 +172,12 @@ input,select,textarea{color:var(--label); background:transparent; border:none; o
   font-variant-numeric:tabular-nums; font-size:17px; letter-spacing:-.011em}
 input[type=number],input[type=text],input[type=date],input[type=password]{
   background:var(--fill); border-radius:9px; padding:8px 11px; width:100%; min-width:0}
-input[type=number]{text-align:right; max-width:112px}
+/* Keyed on inputmode, not on type. numRow() emits type="text" so that a Finnish
+   comma survives to the parser \u2014 which silently dropped every numeric field out
+   of this rule and into the 56%-wide left-aligned text rule below, left-aligning
+   and stretching every number in Setup, the Walking row and the whole Football
+   form. inputmode is what actually distinguishes "this holds a number". */
+input[inputmode=numeric],input[inputmode=decimal]{text-align:right; max-width:112px}
 
 /* A long text value cannot share a flex row with its own label. These inputs
    are width:100%, so in a .row they claimed everything, collapsed the label
@@ -185,6 +190,10 @@ input[type=number]{text-align:right; max-width:112px}
 .row.stack input{width:100%; max-width:none; text-align:left}
 .row:not(.stack) input[type=text],
 .row:not(.stack) input[type=password]{flex:0 1 auto; max-width:56%}
+/* ...but a numeric field inside a row keeps its narrow right-aligned column.
+   Same specificity as the rule above, so it has to come after it. */
+.row:not(.stack) input[inputmode=numeric],
+.row:not(.stack) input[inputmode=decimal]{flex:0 0 auto; max-width:112px; text-align:right}
 textarea{background:var(--fill); border-radius:var(--r-ctl); padding:11px 13px; width:100%;
   resize:vertical; min-height:88px; line-height:1.45; font-size:17px}
 .btn{display:inline-flex; align-items:center; justify-content:center; gap:6px;
