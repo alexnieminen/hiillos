@@ -23,7 +23,13 @@
 :root{
   color-scheme: dark;
   --bg:#0A0908; --card:#16130F; --raised:#221C15;
-  --label:#FFF4E8; --label2:rgba(255,238,222,.60); --label3:rgba(255,238,222,.32);
+  /* label2 and label3 carry every "where this number came from" sentence in
+     the app, which is the whole reason it exists. At .32 the third tier
+     measured 2.60:1 on the background \u2014 below even the 3:1 floor for large
+     text, let alone 4.5:1 for body copy, and it is used at 12px. On a phone
+     in daylight it was simply gone. .50 and .64 give 4.83:1 and 7.02:1 and
+     still read as three distinct tiers. */
+  --label:#FFF4E8; --label2:rgba(255,238,222,.64); --label3:rgba(255,238,222,.50);
   --sep:rgba(255,178,110,.13);
 
   /* An ORDERED heat ramp, not four interchangeable oranges. A fire has a
@@ -377,8 +383,16 @@ textarea{background:var(--fill); border-radius:var(--r-ctl); padding:11px 13px; 
 
 /* Contrast preference: give surfaces a real edge (§14) */
 @media (prefers-contrast: more){
-  .card,.tabbar,.sheet{border:1px solid var(--label2)}
-  :root{--label2:#3C3C43CC; --sep:#3C3C4366}
+  /* This used to set --label2 to #3C3C43CC \u2014 Apple's LIGHT-mode secondary
+     grey. In a dark-only app that is a dark grey on a near-black ground,
+     about 1.3:1, so asking for MORE contrast made the text nearly invisible.
+     Raise the tiers and the structure instead. */
+  .card,.tabbar,.sheet{border:1px solid var(--sep)}
+  :root{
+    --label2:rgba(255,238,222,.82);
+    --label3:rgba(255,238,222,.70);
+    --sep:rgba(255,178,110,.34);
+  }
 }
 /* Reduced motion: keep meaning, drop the vestibular load (§14) */
 @media (prefers-reduced-motion: reduce){
@@ -596,6 +610,18 @@ function tefOf(e){ return (e.p||0)*TEF_P + (e.c||0)*TEF_C + (e.f||0)*TEF_F; }
    carbs and fat — so it is your diet's real thermic cost rather than a number
    typed into a settings screen. Clamped to the range whole-diet measurements
    actually span, so a silly protein target can't invent free calories. */
+/* The carb and fat targets implied by the day's calorie target and the protein
+   goal \u2014 protein first, then the remainder split 55/45 by energy, which is
+   exactly the split plannedTefRate() already prices the day's digestion with.
+   The bars beside the ring used to be drawn against a hardcoded 300 g and
+   110 g: two invented constants, in the one app whose premise is that every
+   number on screen says where it came from. */
+function macroTargets(kcal){
+  var P = S.profile, pg = Math.max(0, pnum(P.proteinTarget, 0));
+  if(!(kcal > 0)) return {p:pg, c:0, f:0};
+  var restK = Math.max(0, kcal - Math.min(kcal, pg*4));
+  return {p:pg, c:restK*0.55/4, f:restK*0.45/9};
+}
 function plannedTefRate(kcal){
   var P = S.profile;
   var p = Math.max(0, +P.proteinTarget || 0);
@@ -2236,14 +2262,15 @@ function paintPane(pane, d, sp, instant){
   var left   = target - e.k;
   var frac   = target>0 ? e.k/target : 0;
   var np     = b.np;
+  var mt     = macroTargets(target);
 
   if(sp){
     var go = instant ? "set" : "to";
     sp.ring[go](frac);
     sp.num[go](Math.abs(left));
-    sp.p[go](P.proteinTarget ? e.p/P.proteinTarget : 0);
-    sp.c[go](Math.min(1, e.c/300));
-    sp.f[go](Math.min(1, e.f/110));
+    sp.p[go](mt.p ? e.p/mt.p : 0);
+    sp.c[go](mt.c ? Math.min(1, e.c/mt.c) : 0);
+    sp.f[go](mt.f ? Math.min(1, e.f/mt.f) : 0);
     sp.k[go](frac);
   } else {
     var ring = pane.querySelector(".js-ring");
@@ -2252,17 +2279,20 @@ function paintPane(pane, d, sp, instant){
       ring.setAttribute("stroke", frac > 1 ? "var(--red)" : "var(--blue)");
     }
     setRingNum(pane, Math.round(Math.abs(left)));
-    setBar(pane,"p", P.proteinTarget ? e.p/P.proteinTarget : 0, null);
-    setBar(pane,"c", Math.min(1, e.c/300), null);
-    setBar(pane,"f", Math.min(1, e.f/110), null);
+    setBar(pane,"p", mt.p ? e.p/mt.p : 0, null);
+    setBar(pane,"c", mt.c ? Math.min(1, e.c/mt.c) : 0, null);
+    setBar(pane,"f", mt.f ? Math.min(1, e.f/mt.f) : 0, null);
     setBar(pane,"k", frac, null);
   }
 
   setText(pane, ".js-ringlbl", left >= 0 ? "left" : "over");
   if(sp) setRingNum(pane, Math.round(Math.abs(left)));
-  setText(pane, '.js-qt[data-m="p"]', Math.round(e.p)+" / "+P.proteinTarget+"g");
-  setText(pane, '.js-qt[data-m="c"]', Math.round(e.c)+"g");
-  setText(pane, '.js-qt[data-m="f"]', Math.round(e.f)+"g");
+  /* All three now read "eaten / target", because all three bars now HAVE a
+     target. Carbs and fat used to show a bare gram count beside a bar that was
+     quietly measured against 300 g and 110 g. */
+  setText(pane, '.js-qt[data-m="p"]', Math.round(e.p)+" / "+Math.round(mt.p)+"g");
+  setText(pane, '.js-qt[data-m="c"]', Math.round(e.c)+" / "+Math.round(mt.c)+"g");
+  setText(pane, '.js-qt[data-m="f"]', Math.round(e.f)+" / "+Math.round(mt.f)+"g");
   setText(pane, ".js-eatenq", Math.round(e.k)+" / "+Math.round(target));
 
   /* ---- walking ---- */
@@ -2368,7 +2398,7 @@ function paintPane(pane, d, sp, instant){
           : 'that belongs to the settings that changed, not to this day.')+
         ' Editing the steps above moves this day by what the steps are worth and leaves '+
         'the rest alone. '+
-        '<a data-press style="color:var(--accent)" onclick="repriceDay(\''+d+'\')">'+
+        '<a data-press style="color:var(--ember)" onclick="repriceDay(\''+d+'\')">'+
         'Re-price it at today\u2019s numbers</a> to use the correction here too.';
     }
   }
@@ -2411,7 +2441,7 @@ function deficitWhy(d){
       : "Locked at "+Math.round(x.deficit)+" \u2014 the deficit that was in force that day.";
     if(x.mx) s += " Marked maintenance: left out of adherence.";
     if(_lastRebase && _lastRebase.d === d)
-      s += ' <a data-press style="color:var(--accent)" onclick="undoRebase()">undo the re-price</a>';
+      s += ' <a data-press style="color:var(--ember)" onclick="undoRebase()">undo the re-price</a>';
     return s;
   }
   if(win) return "Maintenance window" + (win.label ? " ("+esc(win.label)+")" : "") + ".";
@@ -2424,8 +2454,11 @@ function deficitWhy(d){
      in a phase you have already eaten your way out of. Say how old it is. */
   var stale = weighStaleness(d);
   return b ? ("Plan phase "+bandLabel(idx)+", from a trend weight of "+nw(tw)+" kg"+
-              (stale > 7 ? " \u2014 but your last weigh-in was "+stale+" days ago, so the "+
-               "phase is running on an old number" : "")+".")
+              (stale >= 999
+                ? " \u2014 a placeholder, because nothing has been weighed yet"
+                : stale > 7
+                ? " \u2014 but your last weigh-in was "+stale+" days ago, so the "+
+                  "phase is running on an old number" : "")+".")
            : "From your plan.";
 }
 /* A body-fat target expressed as a weight, as a RANGE — because the lean mass
@@ -2558,13 +2591,21 @@ function setBar(scope, key, frac, label){
 function numRow(label, sub, val, oninput, step, suffix){
   /* inputmode matters on a phone: type=number on its own gives iOS the full
      alphanumeric keyboard with a cramped number row. "numeric" is the plain
-     keypad for whole numbers, "decimal" adds the separator. */
+     keypad for whole numbers, "decimal" adds the separator.
+
+     type is TEXT, not number, and that is deliberate. A type=number input
+     reports the empty string for anything it cannot parse as a float \u2014 and
+     on a Finnish keyboard the decimal separator is a COMMA, so typing 90,55
+     reached the handler as "". Every setter here already does
+     parseFloat(String(v).replace(",",".")), and that guard was dead code
+     because the comma never survived the input element. */
   var mode = (step === "1" || step === "5" || step === "10" || step === "25" ||
               step === "100" || step === "250") ? "numeric" : "decimal";
   return '<label class="row"><div class="grow"><div class="ttl t-body">'+label+'</div>'+
     (sub?'<div class="sub2 t-foot">'+sub+'</div>':'')+'</div>'+
-    '<input type="number" inputmode="'+mode+'" enterkeyhint="done" '+
-      'step="'+(step||"any")+'" value="'+val+'" oninput="'+oninput+'">'+
+    '<input type="text" inputmode="'+mode+'" enterkeyhint="done" '+
+      'autocorrect="off" autocapitalize="off" spellcheck="false" '+
+      'data-step="'+(step||"any")+'" value="'+val+'" oninput="'+oninput+'">'+
     (suffix?'<span class="val t-body" style="flex:0 0 auto">'+suffix+'</span>':'')+'</label>';
 }
 
@@ -2613,7 +2654,7 @@ function viewToday(d){
     '<div class="note js-burnline" style="border-top:.5px solid var(--sep)"></div>'+
     '<div class="note js-drift" style="display:none;padding-top:0;color:var(--label3)"></div>'+
     '<div style="padding:0 16px 13px"><a class="t-cap js-mx" data-press '+
-      'style="display:none;color:var(--accent)"></a></div>'+
+      'style="display:none;color:var(--ember)"></a></div>'+
   '</div>';
 
   h += '<div class="sectionhead"><h2 class="t-section">Add food</h2>'+
@@ -3056,7 +3097,13 @@ function bfSection(){
 }
 function viewTrends(){
   var P=S.profile, arr=sortedWeights(), h=brandLine()+'<h1 class="t-large">Trend</h1>';
-  var wr = weeklyRate(), w = latestWeight();
+  /* The trend weight, not the last reading. This drives "Now", "To go" and the
+     body-fat figure; the headline card at the top of this same tab shows the
+     7-day average, and the forecast under it is computed from the trend too.
+     Using latestWeight() here printed a different answer to "what do I weigh"
+     five screens apart, on the tab whose entire purpose is numbers you can
+     trust \u2014 and it moved with one heavy morning. */
+  var wr = weeklyRate(), w = arr.length ? trendWeightAt(today) : latestWeight();
   if(arr.length < 2){
     h += '<div class="card"><div class="empty">Log your morning weight for about a week.<br>'+
       'Then this page tells you whether to eat more or less — based on what the scale actually did.</div></div>';
@@ -3414,10 +3461,13 @@ function planSection(){
       '<div class="t-sub" style="color:var(--label2);line-height:1.5">'+
       'Deficit <b>'+Math.round(cur_b.deficit)+'</b> \u2192 about <b>'+n1(cur_b.deficit*7/7700)+
       ' kg/week</b>. Trend weight '+nw(tw)+' kg'+
-      (weighStaleness(today) > 7
-        ? ', though nothing has gone on the scale for '+weighStaleness(today)+
-          ' days \u2014 this phase is being chosen by a number that old'
-        : '')+'.'+
+      (function(){
+        var st = weighStaleness(today);
+        if(st >= 999) return ' \u2014 but there is no weigh-in at all yet, so this is a '+
+          'placeholder rather than your phase';
+        return st > 7 ? ', though nothing has gone on the scale for '+st+
+          ' days \u2014 this phase is being chosen by a number that old' : '';
+      })()+'.'+
       (cc ? '<br>'+(
         cc.level === "over"
           ? '<b style="color:var(--bad)">'+Math.round(cc.by)+
@@ -3681,7 +3731,7 @@ function chartSVG(ma){
       /* the step between them, drawn as a right angle so the vertical leg IS
          the weight change and the horizontal leg IS the time it took */
       marks += '<path d="M'+xA.toFixed(1)+','+yA.toFixed(1)+' L'+xB.toFixed(1)+','+yA.toFixed(1)+
-        ' L'+xB.toFixed(1)+','+yB.toFixed(1)+'" fill="none" stroke="var(--accent)" '+
+        ' L'+xB.toFixed(1)+','+yB.toFixed(1)+'" fill="none" stroke="var(--ember)" '+
         'stroke-width="1.3" stroke-dasharray="4 3" opacity=".85"/>';
       /* No numbers in the plot. They collided with the phase-target label and
          with each other whenever the two weeks sat level, and the caption
@@ -4103,8 +4153,17 @@ function setBmrMode(v){ S.profile.bmrMode = v; S.pm = Date.now(); save(); render
    ACTIONS
    ================================================================= */
 function setP(k,v){
-  var num = parseFloat(String(v).replace(",","."));
-  S.profile[k] = isNaN(num) ? DEFAULT_PROFILE[k] : num;
+  /* oninput fires on every keystroke, INCLUDING the one that empties the field
+     before you retype it. Falling back to DEFAULT_PROFILE there quietly
+     overwrote real settings with factory ones: clearing goal weight to retype
+     it set it to 75, clearing lean mass set it to 0. An empty field is someone
+     mid-edit, not someone asking for the default \u2014 so leave the stored value
+     alone and let the next render put it back. */
+  var raw = String(v == null ? "" : v).trim();
+  if(raw === "") return;
+  var num = parseFloat(raw.replace(",","."));
+  if(isNaN(num)) return;
+  S.profile[k] = num;
   S.pm = Date.now();                       // so sync knows which side is newer
   save();
   if(view==="today") syncToday();
@@ -5053,7 +5112,13 @@ function render(){
   else                       r.innerHTML = viewSetup();
 
   renderTabs();
-  if(view==="today"){ initTodaySprings(); syncToday(); Ghosts.schedule(); }
+  /* instant, not animated. The springs start at 0, so an animated first paint
+     spends ~500 ms counting the ring figure up from zero \u2014 and the glance
+     this app is built for is shorter than that. Opening Today 8-12 times a day
+     meant the first moment of every open showed a number that was not true.
+     Logging food still animates: syncToday() with no argument is the in-place
+     update, and there the movement IS the feedback. */
+  if(view==="today"){ initTodaySprings(); syncToday(true); Ghosts.schedule(); }
   if(view==="football") positionSeg(false);
 }
 
