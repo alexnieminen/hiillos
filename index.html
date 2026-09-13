@@ -22,21 +22,30 @@
    light-mode equivalent, and the whole idea is a slow glow in the dark. */
 :root{
   color-scheme: dark;
-  --bg:#0A0908; --card:#16130F; --raised:#221C15;
+  /* Measured on a phone: --card on --bg was 1.07:1, --raised on --card 1.10:1,
+     the hairline 1.29:1 and the ring's unfilled track 1.30:1. Every TEXT token
+     was fine, so in daylight the words survived and every container, divider
+     and track vanished — Today and Setup collapsed into one undifferentiated
+     column of sentences, and the ring stopped reading as a fraction because you
+     could not see the whole. iOS dark grouped tables sit near 1.17:1; these now
+     do too. --bg is untouched: the brand mark's PNG ground is matched to it. */
+  --bg:#0A0908; --card:#221D16; --raised:#332A1F;
   /* label2 and label3 carry every "where this number came from" sentence in
      the app, which is the whole reason it exists. At .32 the third tier
-     measured 2.60:1 on the background \u2014 below even the 3:1 floor for large
+     measured 2.60:1 on the background — below even the 3:1 floor for large
      text, let alone 4.5:1 for body copy, and it is used at 12px. On a phone
      in daylight it was simply gone. .50 and .64 give 4.83:1 and 7.02:1 and
      still read as three distinct tiers. */
   --label:#FFF4E8; --label2:rgba(255,238,222,.64); --label3:rgba(255,238,222,.50);
-  --sep:rgba(255,178,110,.13);
+  --sep:rgba(255,190,130,.22);      /* ~1.5:1 — still a hairline, now a visible one */
 
   /* An ORDERED heat ramp, not four interchangeable oranges. A fire has a
      gradient, so the palette can carry meaning instead of just decorating:
      banked coal for the energy you spend lying still, flame for the energy
      you spend on purpose. Used in that order by the composition bar. */
-  --char:#5A1B08;       /* h1 — banked, nearly out: resting metabolism */
+  --char:#6B2109;       /* h1 — banked, nearly out: resting metabolism.
+                           Raised with --card so it stays the dimmest step of
+                           the ramp instead of sinking into the new surface. */
   --ember-lo:#8E2E0B;   /* h2 — smouldering: incidental movement */
   --ember:#FF7A18;      /* h3 — the live coal, and the primary accent */
   --ember-hi:#FFB43D;   /* h4 — flame: deliberate training */
@@ -46,7 +55,7 @@
   --warn:#FFB43D;
   --bad:#FF4E3A;
 
-  --fill:rgba(255,170,90,.11);
+  --fill:rgba(255,170,90,.17);      /* ring track, and the empty half of a macro bar */
   --fill2:rgba(255,170,90,.18);
   --press:rgba(255,170,90,.16);
   --chrome:rgba(14,12,10,.74);
@@ -138,7 +147,8 @@ input,textarea{-webkit-user-select:text; user-select:text}
 h1{margin:2px 0 2px}
 .sectionhead{display:flex; align-items:baseline; justify-content:space-between;
              gap:10px; margin:26px 0 8px; padding:0 4px}
-.sectionhead a{color:var(--blue); cursor:pointer; font-size:14px; font-weight:500}
+.sectionhead a{color:var(--blue); cursor:pointer; font-size:14px; font-weight:500;
+               padding:8px 4px; margin:-8px -4px}   /* hit box, text unmoved */
 
 /* ============================================================
    Cards + rows
@@ -149,6 +159,15 @@ h1{margin:2px 0 2px}
 .row:last-child{border-bottom:none}
 .row .grow{flex:1; min-width:0}
 .row .ttl{overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+/* Setting rows opt out: the label was being truncated ("Extra activity counts
+   for…") while the OPTIONAL explanation under it wrapped freely. List rows
+   — foods, entries, windows — keep the one-line ellipsis. */
+.row .ttl.wrap{white-space:normal; overflow:visible; overflow-wrap:anywhere}
+/* A <select> sizes itself to its longest option, and "Katch-McArdle on 71 kg
+   lean" left 61px for a label that needs 87 — so "Resting metabolism" stayed
+   clipped even with wrapping on. Cap it; the native control truncates its own
+   text with an ellipsis, which is the right place for the loss. */
+.row:not(.stack) select{max-width:56%; min-width:0}
 .row .sub2{color:var(--label2); margin-top:1px}
 .val{font-variant-numeric:tabular-nums; color:var(--label2)}
 .val.big{color:var(--label); font-weight:600}
@@ -163,6 +182,12 @@ h1{margin:2px 0 2px}
    fill, which let the red Delete panel parked behind the row show straight
    through on an ordinary tap. */
 .row[data-press].pressing{background-image:linear-gradient(var(--press),var(--press))}
+/* "format?", "copy day" and the section "edit" links matched neither the row
+   rule nor the .ctl rule, so they took the transition and changed nothing —
+   and -webkit-tap-highlight-color:transparent had already removed the native
+   flash. A control that neither confirms the tap nor reliably receives it
+   reads as broken. */
+a[data-press].pressing{opacity:.5}
 .ctl[data-press].pressing{transform:scale(.965); opacity:.85}
 
 /* ============================================================
@@ -173,7 +198,7 @@ input,select,textarea{color:var(--label); background:transparent; border:none; o
 input[type=number],input[type=text],input[type=date],input[type=password]{
   background:var(--fill); border-radius:9px; padding:8px 11px; width:100%; min-width:0}
 /* Keyed on inputmode, not on type. numRow() emits type="text" so that a Finnish
-   comma survives to the parser \u2014 which silently dropped every numeric field out
+   comma survives to the parser — which silently dropped every numeric field out
    of this rule and into the 56%-wide left-aligned text rule below, left-aligning
    and stretching every number in Setup, the Walking row and the whole Football
    form. inputmode is what actually distinguishes "this holds a number". */
@@ -198,7 +223,9 @@ textarea{background:var(--fill); border-radius:var(--r-ctl); padding:11px 13px; 
   resize:vertical; min-height:88px; line-height:1.45; font-size:17px}
 .btn{display:inline-flex; align-items:center; justify-content:center; gap:6px;
   font-size:17px; font-weight:600; letter-spacing:-.012em;
-  background:var(--blue); color:#fff; border:none; border-radius:var(--r-ctl);
+  /* #fff on #FF7A18 is 2.61:1 — lower than --label3, on the button tapped
+     more than anything else here. Near-black on the same orange is ~7.5:1. */
+  background:var(--blue); color:#1A0E05; border:none; border-radius:var(--r-ctl);
   padding:13px 18px; cursor:pointer; width:100%}
 .btn.sec{background:var(--fill); color:var(--blue)}
 .btn.dim{background:var(--fill); color:var(--label)}
@@ -211,8 +238,11 @@ textarea{background:var(--fill); border-radius:var(--r-ctl); padding:11px 13px; 
 .seg button{flex:1; position:relative; z-index:1; font-size:14px; font-weight:600;
   letter-spacing:-.006em; color:var(--label); background:none; border:none; border-radius:8px;
   padding:8px 4px; cursor:pointer}
+/* Was ~28x24. The glyph stays 20px and the row keeps its height; the added
+   area is dead space at the card's edge, so nothing else moves closer. */
 .del{color:var(--red); font-size:20px; background:none; border:none; cursor:pointer;
-     padding:2px 4px; line-height:1; flex:0 0 auto}
+     padding:12px 16px 12px 10px; margin:-12px -16px -12px 0; min-width:44px;
+     line-height:1; flex:0 0 auto}
 .add{color:var(--blue); font-size:15px; font-weight:600; background:none; border:none;
      cursor:pointer; padding:2px 6px; flex:0 0 auto}
 
@@ -387,12 +417,17 @@ textarea{background:var(--fill); border-radius:var(--r-ctl); padding:11px 13px; 
   width:32px; height:32px; border-radius:50%; cursor:pointer; line-height:1; flex:0 0 auto}
 .datebar input{background:transparent; font-size:15px; color:var(--label2); padding:0; width:auto}
 .dots{display:flex; gap:5px; align-items:center; margin-left:auto}
-.dot{width:6px; height:6px; border-radius:50%; background:var(--label3)}
-.dot.on{background:var(--blue)}
+/* The three dots were hardcoded to today/-1/-2, so four days back all three
+   went dark and the indicator showed a state it could not represent — at
+   exactly the moment you most need to know where you are. Replaced by a
+   control that says where you are AND takes you back. */
+.datebar .js-today{background:var(--fill); border:none; color:var(--blue);
+  font-size:14px; font-weight:600; letter-spacing:-.006em; border-radius:999px;
+  padding:0 14px; height:36px; cursor:pointer; white-space:nowrap}
 
 /* Contrast preference: give surfaces a real edge (§14) */
 @media (prefers-contrast: more){
-  /* This used to set --label2 to #3C3C43CC \u2014 Apple's LIGHT-mode secondary
+  /* This used to set --label2 to #3C3C43CC — Apple's LIGHT-mode secondary
      grey. In a dark-only app that is a dark grey on a near-black ground,
      about 1.3:1, so asking for MORE contrast made the text nearly invisible.
      Raise the tiers and the structure instead. */
@@ -1372,6 +1407,14 @@ function undoRebase(){
   _lastRebase = null;
   save(); render(); toast("Target put back");
 }
+/* For a confirm whose entire job is naming the day, the bare weekday is not
+   enough: "Add 1 item to la?" is ambiguous the moment you are more than a week
+   out, which is exactly when this sheet appears. */
+function dayLabel(d){
+  if(d === today) return "today";
+  if(d === shift(today,-1)) return "yesterday";
+  return wkday(d)+" "+fmtShortMid(d);
+}
 function wkday(d){
   return new Date(d+"T12:00").toLocaleDateString(undefined,{weekday:"short"});
 }
@@ -2314,7 +2357,7 @@ function paintPane(pane, d, sp, instant){
     ? " \u00b7 "+Math.round(np.exSteps).toLocaleString()+" over your usual "+
       Math.round(np.hab).toLocaleString()+", at "+Math.round(np.comp*100)+"%"
     : (np.hab > 0 ? " \u00b7 usual "+Math.round(np.hab).toLocaleString() : "");
-  sub += " \u00b7 "+(Math.round(np.perStep*1000)/1000)+"/step";
+  sub += " \u00b7 "+(Math.round(np.perStep*1000)/1000)+" kcal/step";
   setText(pane, ".js-stepsub", sub);
 
   /* ---- idle ---- */
@@ -2610,7 +2653,7 @@ function numRow(label, sub, val, oninput, step, suffix){
      because the comma never survived the input element. */
   var mode = (step === "1" || step === "5" || step === "10" || step === "25" ||
               step === "100" || step === "250") ? "numeric" : "decimal";
-  return '<label class="row"><div class="grow"><div class="ttl t-body">'+label+'</div>'+
+  return '<label class="row"><div class="grow"><div class="ttl wrap t-body">'+label+'</div>'+
     (sub?'<div class="sub2 t-foot">'+sub+'</div>':'')+'</div>'+
     '<input type="text" inputmode="'+mode+'" enterkeyhint="done" '+
       'autocorrect="off" autocapitalize="off" spellcheck="false" '+
@@ -2635,9 +2678,8 @@ function viewToday(d){
       '<button class="nav ctl" data-press onclick="goDay(1)" aria-label="Next day"'+
         (isToday?' disabled style="opacity:.35"':'')+'>›</button>'+
       '<div class="dots">'+
-        '<span class="dot'+(d===shift(today,-2)?" on":"")+'"></span>'+
-        '<span class="dot'+(d===shift(today,-1)?" on":"")+'"></span>'+
-        '<span class="dot'+(isToday?" on":"")+'"></span>'+
+        (isToday ? '' :
+          '<button class="js-today" data-press onclick="goToday()">Today ›</button>')+
       '</div>'+
     '</div>';
 
@@ -2994,7 +3036,7 @@ function renderFoodList(){
         '<div class="sub2 t-foot">'+esc(f.u||"")+' · '+n1(f.p)+'P '+n1(f.c)+'C '+n1(f.f)+'F</div></div>'+
       '<span class="val t-body">'+Math.round(f.k)+'</span>'+
       '<button class="add" onclick="addFromLib(\''+f.id+'\')">Add</button>'+
-      '<button class="del" onclick="rmFood(\''+f.id+'\')">⊖</button></div>';
+      '<button class="del ctl" data-press onclick="rmFood(\''+f.id+'\')">⊖</button></div>';
   });
   var c = el("foodlist"); if(c) c.innerHTML = h + '</div>';
 }
@@ -3126,11 +3168,16 @@ function viewTrends(){
       '</div>'+chartSVG(ma)+rateLegend(wr)+'</div>';
     if(wr) h += adviceCard(wr,P);
   }
-  h += bfSection();
+  /* Body fat used to render first, so ~615px \u2014 265 of it standing prose about
+     bioimpedance that moves 0.1 points a week \u2014 sat between the rate pill and
+     the plan. The weekly questions are which phase, what deficit, when does it
+     land; those now come straight after "What to do", and Body fat sits beside
+     "Where this ends", which makes the same lean-mass claim. */
   h += planSection();
   h += adherenceSection();
   h += calibrationSection();
   h += waistSection(wr);
+  h += bfSection();
 
   /* Goal weight from LEAN MASS rather than a number typed in: at a fixed
      fat-free mass, a body-fat target IS a weight, and it moves if your lean
@@ -3168,7 +3215,7 @@ function viewTrends(){
     h += '<div class="row"><div class="grow"><div class="ttl t-body">'+
       new Date(q.d+"T12:00").toLocaleDateString(undefined,{weekday:"short",day:"numeric",month:"short"})+
       '</div></div><span class="val big t-body">'+nw(q.w)+' kg</span>'+
-      '<button class="del" onclick="rmWeight(\''+q.d+'\')">⊖</button></div>';
+      '<button class="del ctl" data-press onclick="askRmWeight(\''+q.d+'\')">⊖</button></div>';
   });
   return h + '</div><div style="height:20px"></div>';
 }
@@ -3440,6 +3487,12 @@ function fmtShort(dstr){
   if(d.getFullYear() !== new Date().getFullYear()) opts.year = "numeric";
   return d.toLocaleDateString(undefined, opts);
 }
+/* A Finnish locale renders a short date as "12. syysk." \u2014 already terminated.
+   Concatenating a sentence onto that gives "until 12. syysk.. Eating at...",
+   which reads as the app being broken. Use this wherever a date lands
+   mid-sentence; fmtShort keeps its period for standalone use, where the stop
+   belongs to the Finnish abbreviation. */
+function fmtShortMid(dstr){ return fmtShort(dstr).replace(/\.$/, ""); }
 function etaText(){
   var f = planForecast();
   if(!f.length) return "reached";
@@ -3459,7 +3512,7 @@ function planSection(){
     h += '<div style="padding:14px 16px">'+
       '<div class="t-head" style="margin-bottom:4px">Maintenance \u00b7 '+esc(win.label||"paused")+'</div>'+
       '<div class="t-sub" style="color:var(--label2);line-height:1.5">Deficit is '+
-      Math.round(+win.deficit||0)+' until '+fmtShort(win.to)+
+      Math.round(+win.deficit||0)+' until '+fmtShortMid(win.to)+
       '. Eating at maintenance through a hard week is a deliberate part of the plan, '+
       'not a lapse \u2014 nothing here counts it as one.</div></div>';
   } else if(cur_b){
@@ -3482,12 +3535,17 @@ function planSection(){
           ? '<b style="color:var(--bad)">'+Math.round(cc.by)+
             ' over the muscle-loss ceiling</b> of '+Math.round(cc.ceiling)+
             ' at this weight \u2014 ease it back.'
+          /* Constant noun phrase, changing verdict. The concept that exists
+             to stop you eating into muscle was spelled out ONLY in the branch
+             you see once it is already too late; in the other two it was a
+             bare "Ceiling 742". Naming it every week means that in the week it
+             fires, you already know what it is saying. */
           : cc.level === "tight"
-          ? '<span style="color:var(--warn)">Ceiling '+Math.round(cc.ceiling)+
-            ', '+Math.round(cc.spare)+' spare</span> \u2014 but over the line if your '+
-            'lean mass turns out to be nearer the top of its band.'
-          : 'Ceiling '+Math.round(cc.ceiling)+' at this weight, so '+
-            Math.round(cc.spare)+' spare.'
+          ? '<span style="color:var(--warn)">Muscle-loss ceiling '+Math.round(cc.ceiling)+
+            ' kcal, '+Math.round(cc.spare)+' to spare</span> \u2014 but over the line if '+
+            'your lean mass turns out to be nearer the top of its band.'
+          : 'Muscle-loss ceiling '+Math.round(cc.ceiling)+' kcal at this weight, so '+
+            Math.round(cc.spare)+' to spare.'
       ) : '')+
       '</div></div>';
   }
@@ -3621,9 +3679,7 @@ function rateLegend(wr){
   var d = wr.from.avg - wr.to.avg;
   /* Finnish renders a short date as "12.9." \u2014 already terminated \u2014 so a
      sentence built by concatenation ends up with two full stops. */
-  var dt = function(dstr){
-    return fmtShort(dstr).replace(/\.$/, "");
-  };
+  var dt = fmtShortMid;
   return '<div class="t-cap" style="color:var(--label3);padding:2px 16px 14px;line-height:1.55">'+
     '<span style="color:var(--ember)">\u25ae</span> the week to <b>'+dt(wr.to.d)+
     '</b> averages <b>'+nw(wr.to.avg)+' kg</b>, measured against '+
@@ -3814,7 +3870,7 @@ function viewSetup(){
     numRow("Height","", P.height, "setP('height',this.value)", "1", "cm")+
     numRow("Lean mass","fat-free weight from the scale · drives Katch-McArdle and your goal weight",
       P.leanMass, "setP('leanMass',this.value)", "0.1", "kg")+
-    '<div class="row"><div class="grow"><div class="ttl t-body">Resting metabolism</div>'+
+    '<div class="row"><div class="grow"><div class="ttl wrap t-body">Resting metabolism</div>'+
       '<div class="sub2 t-foot">'+bmrBasis(today)+' \u2192 '+Math.round(bmrAt(today))+' kcal'+
       /* Katch-McArdle is the better formula ONLY when lean mass is measured
          well. Once lean mass is itself an estimate it becomes the worse one,
@@ -4043,7 +4099,7 @@ function planEditor(){
     h += '<div class="row"><div class="grow"><div class="ttl t-body">'+esc(w.label||"Maintenance")+'</div>'+
       '<div class="sub2 t-foot">'+w.from+' \u2192 '+w.to+' \u00b7 deficit '+
       Math.round(+w.deficit||0)+'</div></div>'+
-      '<button class="del" onclick="rmWindow('+i+')">\u2296</button></div>';
+      '<button class="del ctl" data-press onclick="rmWindow('+i+')">\u2296</button></div>';
   });
   h += '<div style="padding:12px;display:flex;flex-direction:column;gap:8px">'+
     '<div style="display:flex;gap:8px;align-items:center">'+
@@ -4201,6 +4257,19 @@ function setWaist(v){
   if(!isNaN(c) && c>0) S.waist.push({d:cur, cm:c, m:Date.now()});
   save();
 }
+/* A weigh-in anchors the trend, the plan band, the frozen deficit of every day
+   after it and nine months of chart. One mis-hit at the scrolling edge of a
+   list, one-handed, used to delete it with no dialog and no undo. Food entries
+   already need a deliberate 96px swipe; this is the same idea at the same
+   weight. */
+function askRmWeight(d){
+  var q = sortedWeights().filter(function(r){ return r.d === d; })[0];
+  if(!q){ rmWeight(d); return; }
+  sheet('<b>Delete the '+nw(q.w)+' kg weigh-in from '+fmtShortMid(d)+'?</b><br>'+
+    '<span style="opacity:.6">The trend, the plan phase and every day priced '+
+    'from it are recomputed.</span>',
+    "Delete", function(){ rmWeight(d); });
+}
 function rmWeight(d){
   editWeight(d, function(){
     S.weights = S.weights.filter(function(q){ return q.d!==d; });
@@ -4213,12 +4282,39 @@ function rmEntry(i){
 function addPaste(){
   var pane = livePane(); if(!pane) return;
   var t = pane.querySelector(".js-paste"); if(!t) return;
-  var items = parseBlock(t.value);
+  /* Per line, so a line the parser cannot read is HANDED BACK instead of
+     vanishing. Paste six lines, have two fail, and the old code logged four,
+     said "Added 4 items" for 1.9 s and then cleared the box — leaving a hole in
+     the day's total with nothing left on screen to repair it from, which
+     adherence and measured burn then inherit for good. */
+  var lines = String(t.value).replace(/\r/g,"").split("\n");
+  var items = [], failed = [];
+  lines.forEach(function(L){
+    if(!L.trim()) return;
+    if(isNoiseLine(stripMd(L))) return;          // separators, headers, totals
+    var it = parseLine(L);
+    if(it) items.push(it); else failed.push(L);
+  });
   if(!items.length){ toast("Couldn't read that — tap “format?”"); return; }
-  touch(cur).entries = day(cur).entries.concat(items);
-  save(); t.value = ""; t.blur();
-  refreshEntries(); haptic(12);
-  toast("Added "+items.length+" item"+(items.length===1?"":"s"));
+
+  var commit = function(){
+    touch(cur).entries = day(cur).entries.concat(items);
+    save();
+    t.value = failed.join("\n");
+    if(!failed.length) t.blur();
+    refreshEntries(); haptic(12);
+    toast(failed.length
+      ? "Added "+items.length+" \u2014 "+failed.length+" line"+(failed.length===1?"":"s")+
+        " left to fix"
+      : "Added "+items.length+" item"+(items.length===1?"":"s"));
+  };
+  /* A PWA is suspended, not reloaded: `cur` is assigned once at load and
+     rollDay() returns on its first line when the calendar date has not
+     changed. So swiping back to Wednesday, backgrounding the app and reopening
+     hours later leaves you on Wednesday with nothing on the button to say so.
+     This is the last path that can silently put food in the wrong day. */
+  if(cur === today) commit();
+  else confirmItems(items, dayLabel(cur), commit);
 }
 function addFoods(){
   var t = el("newfood"); if(!t) return;
@@ -4336,7 +4432,7 @@ function pasteFromClipboard(){
   navigator.clipboard.readText().then(function(txt){
     var items = parseBlock(txt || "");
     if(!items.length){ toast("Nothing food-shaped on the clipboard"); return; }
-    confirmItems(items, cur === today ? "today" : cur, function(){
+    confirmItems(items, dayLabel(cur), function(){
       touch(cur).entries = day(cur).entries.concat(items);
       save(); refreshEntries(); haptic(12);
       toast("Added "+items.length+" item"+(items.length===1?"":"s"));
@@ -4575,7 +4671,13 @@ function importData(input){
 }
 function wipe(){
   if(!confirm("Erase all logged days, foods and weigh-ins? This cannot be undone.")) return;
-  var keepGh = {ghRepo:S.profile.ghRepo, ghPath:S.profile.ghPath, ghAuto:S.profile.ghAuto};
+  /* Auto-sync is deliberately NOT carried over. save() below queues a push;
+     eight seconds later push() fetches the remote, finds localLogged === 0,
+     treats this as a fresh device and merges every day, weigh-in and food
+     straight back in \u2014 then writes the restored state to GitHub. The one
+     control labelled destructive was a no-op that looked like it had worked. */
+  var hadAuto = !!S.profile.ghAuto;
+  var keepGh = {ghRepo:S.profile.ghRepo, ghPath:S.profile.ghPath, ghAuto:0};
   S = {profile:{}, foods:[], days:{}, weights:[], waist:[],
        plan:JSON.parse(JSON.stringify(DEFAULT_PLAN)), schema:SCHEMA, pm:Date.now()};
   Object.keys(DEFAULT_PROFILE).forEach(function(k){ S.profile[k]=DEFAULT_PROFILE[k]; });
@@ -4583,7 +4685,8 @@ function wipe(){
   S.profile.ghAuto = keepGh.ghAuto;
   invalidateMA(); invalidateHab();
   S.foods = SEED_FOODS.map(function(f,i){ return {id:"s"+i, n:f.n, u:f.u, k:f.k, p:f.p, c:f.c, f:f.f}; });
-  save(); render(); toast("Erased");
+  save(); render();
+  toast(hadAuto ? "Erased \u00b7 auto-sync paused" : "Erased");
 }
 
 /* =================================================================
@@ -5067,6 +5170,10 @@ document.addEventListener("pointercancel", endRowSwipe, {passive:true});
 /* =================================================================
    NAVIGATION
    ================================================================= */
+function goToday(){
+  if(cur === today) return;
+  cur = today; render(); haptic(6);
+}
 function goDay(n){
   if(n > 0 && cur === today) return;
   var next = shift(cur, n);
@@ -5183,7 +5290,7 @@ function handleHash(){
   var items = parseBlock(txt);
   if(!items.length){ toast("Couldn\u2019t read that link"); return; }
   view = "today"; render();
-  confirmItems(items, cur === today ? "today" : cur, function(){
+  confirmItems(items, dayLabel(cur), function(){
     touch(cur).entries = day(cur).entries.concat(items);
     save(); render(); haptic(12);
     toast("Added "+items.length+" item"+(items.length===1?"":"s"));
