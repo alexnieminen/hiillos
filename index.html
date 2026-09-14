@@ -655,7 +655,7 @@ function tefOf(e){ return (e.p||0)*TEF_P + (e.c||0)*TEF_C + (e.f||0)*TEF_F; }
    typed into a settings screen. Clamped to the range whole-diet measurements
    actually span, so a silly protein target can't invent free calories. */
 /* The carb and fat targets implied by the day's calorie target and the protein
-   goal \u2014 protein first, then the remainder split 55/45 by energy, which is
+   goal — protein first, then the remainder split 55/45 by energy, which is
    exactly the split plannedTefRate() already prices the day's digestion with.
    The bars beside the ring used to be drawn against a hardcoded 300 g and
    110 g: two invented constants, in the one app whose premise is that every
@@ -694,11 +694,16 @@ function latestWeight(){
   return arr.length ? arr[arr.length-1].w : 80;
 }
 
-/* Mifflin-St Jeor, evaluated at that day's weight so it tracks you down.
+/* Mifflin-St Jeor, evaluated at that day's TREND weight rather than the raw
+   scale reading — a single weigh-in carries a day or two of water and gut
+   content, and that noise has no business setting a number every other figure
+   in the app is built from. trendWeightAt() is the same 7-day trailing
+   average that already drives the plan band, so this is the one weight the
+   day agrees with everywhere else on screen.
    Katch-McArdle is offered because it uses lean mass directly, which makes it
    the better choice while you have a current body-comp reading. */
 function bmrAt(d){
-  var P = S.profile, w = weightAt(d);
+  var P = S.profile, w = trendWeightAt(d);
   if(P.bmrMode === "manual") return Math.max(0, +P.bmrManual || 0);
   if(P.bmrMode === "katch" && +P.leanMass > 0) return 370 + 21.6 * (+P.leanMass);
   var s = (P.sex === "f") ? -161 : 5;
@@ -746,7 +751,7 @@ function habitualSteps(){
   /* Below five recorded step-days this used to discard the measurement
      entirely and snap to the typed anchor. On a 10,000-step day that is a jump
      from a ~9,500 habit to 3,500, which re-prices 6,000 steps from full credit
-     to the compensated rate and moves the day by ~50 kcal \u2014 a cliff triggered
+     to the compensated rate and moves the day by ~50 kcal — a cliff triggered
      by nothing more than forgetting to log steps for a few days. Fade between
      the two instead, so missing data costs confidence rather than accuracy. */
   var conf = Math.min(1, v.length / 5);
@@ -1387,7 +1392,7 @@ function rebaseDay(d, before){
   return x.target - t0;
 }
 /* The freeze is protection, not a cage. Everything automatic in here refuses
-   to let today's model touch a past day \u2014 which is right as a DEFAULT and
+   to let today's model touch a past day — which is right as a DEFAULT and
    wrong as an absolute, because sometimes the settings really were wrong at
    the time and you want the day re-priced. So: one explicit, per-day, visible,
    undoable action. The app still never does this on its own. */
@@ -1483,7 +1488,7 @@ function targetRate(d){
   var mid = def * 7 / 7700;
   var tol = Math.max(0.1, Math.min(0.8, +S.profile.rateTol || 0.35));
   /* A maintenance phase has a target rate of zero, and a percentage of zero is
-     still zero \u2014 which collapsed the band to the single point [0,0] and left
+     still zero — which collapsed the band to the single point [0,0] and left
      every consumer with no reachable "on target" branch. A perfectly executed
      exam week in which the scale drifted 0.2 kg was classified as "losing
      faster than this phase intends" and answered with "add 300 kcal/day".
@@ -1742,7 +1747,7 @@ function burn(d, raw){
            drift: frozen !== null ? (live - base) : 0, itemScale: km,
            /* How much of today's number is the measured-burn correction. A day
               frozen before you switched that on is priced without it, so this
-              is usually the whole of the drift \u2014 and "your settings changed" is
+              is usually the whole of the drift — and "your settings changed" is
               a useless thing to be told when the setting in question is one the
               app worked out for you. */
            driftCal: live - rawLive,
@@ -2098,7 +2103,7 @@ function weeklyRate(){
   /* The two ends are 7-day means, each carrying ~0.19 kg of noise, so their
      difference carries ~0.27 kg. Dividing that by the span and multiplying by
      7 AMPLIFIES it whenever the span is short: at 3 days the reported rate
-     carries 0.63 kg/week of pure noise \u2014 wider than the rate itself \u2014 and
+     carries 0.63 kg/week of pure noise — wider than the rate itself — and
      adviceCard then hands out a 300 kcal correction on the strength of it.
      Five days caps the amplification at 1.4x. */
   if(span < 5) return null;
@@ -2502,7 +2507,7 @@ function deficitWhy(d){
   var idx = (S.plan.bands||[]).indexOf(b);
   /* trendWeightAt averages the 7 days up to d and, failing that, falls back to
      the most recent reading of ANY age. That fallback is silent, and the band
-     it picks sets the deficit \u2014 so a fortnight without the scale can hold you
+     it picks sets the deficit — so a fortnight without the scale can hold you
      in a phase you have already eaten your way out of. Say how old it is. */
   var stale = weighStaleness(d);
   return b ? ("Plan phase "+bandLabel(idx)+", from a trend weight of "+nw(tw)+" kg"+
@@ -2620,7 +2625,7 @@ function bmrBasis(d){
   if(P.bmrMode === "manual") return "set by hand, all 24 h";
   if(P.bmrMode === "katch" && +P.leanMass > 0)
     return "Katch-McArdle on "+n1(P.leanMass)+" kg lean, all 24 h";
-  return "Mifflin-St Jeor at "+nw(weightAt(d))+" kg, all 24 h";
+  return "Mifflin-St Jeor at "+nw(trendWeightAt(d))+" kg trend, all 24 h";
 }
 
 function fillPane(pane, d){ paintPane(pane, d, null, true); }
@@ -2646,7 +2651,7 @@ function numRow(label, sub, val, oninput, step, suffix){
      keypad for whole numbers, "decimal" adds the separator.
 
      type is TEXT, not number, and that is deliberate. A type=number input
-     reports the empty string for anything it cannot parse as a float \u2014 and
+     reports the empty string for anything it cannot parse as a float — and
      on a Finnish keyboard the decimal separator is a COMMA, so typing 90,55
      reached the handler as "". Every setter here already does
      parseFloat(String(v).replace(",",".")), and that guard was dead code
@@ -3153,7 +3158,7 @@ function viewTrends(){
      7-day average, and the forecast under it is computed from the trend too.
      Using latestWeight() here printed a different answer to "what do I weigh"
      five screens apart, on the tab whose entire purpose is numbers you can
-     trust \u2014 and it moved with one heavy morning. */
+     trust — and it moved with one heavy morning. */
   var wr = weeklyRate(), w = arr.length ? trendWeightAt(today) : latestWeight();
   if(arr.length < 2){
     h += '<div class="card"><div class="empty">Log your morning weight for about a week.<br>'+
@@ -3168,8 +3173,8 @@ function viewTrends(){
       '</div>'+chartSVG(ma)+rateLegend(wr)+'</div>';
     if(wr) h += adviceCard(wr,P);
   }
-  /* Body fat used to render first, so ~615px \u2014 265 of it standing prose about
-     bioimpedance that moves 0.1 points a week \u2014 sat between the rate pill and
+  /* Body fat used to render first, so ~615px — 265 of it standing prose about
+     bioimpedance that moves 0.1 points a week — sat between the rate pill and
      the plan. The weekly questions are which phase, what deficit, when does it
      land; those now come straight after "What to do", and Body fat sits beside
      "Where this ends", which makes the same lean-mass claim. */
@@ -3461,7 +3466,7 @@ function planForecast(){
     if(rate <= 0.01) break;
     var days = Math.round(drop / rate * 7);
     /* Adding the pause pushes the phase's end out, and the days it moves into
-       can themselves be maintenance days \u2014 so counting once over the
+       can themselves be maintenance days — so counting once over the
        UN-extended interval misses any window sitting in the extension. With an
        8-day exam week straddling the boundary the forecast counted 4 of it and
        every date downstream came out 4 days early. Iterate to a fixed point;
@@ -3487,7 +3492,7 @@ function fmtShort(dstr){
   if(d.getFullYear() !== new Date().getFullYear()) opts.year = "numeric";
   return d.toLocaleDateString(undefined, opts);
 }
-/* A Finnish locale renders a short date as "12. syysk." \u2014 already terminated.
+/* A Finnish locale renders a short date as "12. syysk." — already terminated.
    Concatenating a sentence onto that gives "until 12. syysk.. Eating at...",
    which reads as the app being broken. Use this wherever a date lands
    mid-sentence; fmtShort keeps its period for standalone use, where the stop
@@ -3582,7 +3587,7 @@ function adherenceSection(){
   var skipped = 0, logged = 0, rows = [], excused = 0;
   /* 28 days rather than 14. The daily spread of (ate \u2212 asked) is around 500
      kcal, so a fortnight's mean carries about \u00b1130 kcal/day of pure sampling
-     noise and a month about \u00b195 \u2014 and this number is read as if it were exact.
+     noise and a month about \u00b195 — and this number is read as if it were exact.
      Four whole weeks also cancels the weekday pattern instead of half-counting
      it. Days that predate the recorded target are still skipped, so a longer
      window only bites once there is history to fill it. */
@@ -3677,7 +3682,7 @@ function adherenceSection(){
 function rateLegend(wr){
   if(!wr) return "";
   var d = wr.from.avg - wr.to.avg;
-  /* Finnish renders a short date as "12.9." \u2014 already terminated \u2014 so a
+  /* Finnish renders a short date as "12.9." — already terminated — so a
      sentence built by concatenation ends up with two full stops. */
   var dt = fmtShortMid;
   return '<div class="t-cap" style="color:var(--label3);padding:2px 16px 14px;line-height:1.55">'+
@@ -3705,7 +3710,7 @@ function chartSVG(ma){
   var n=ma.length;
   /* X is a DATE axis, not a weigh-in index. Spacing by index drew a fortnight
      with no weigh-ins exactly as wide as a single day, so a gap looked like
-     progress and the slope through it was a lie \u2014 and the two reference weeks
+     progress and the slope through it was a lie — and the two reference weeks
      marked below would sit at the wrong place on the page. */
   var t0 = ma[0].d, totalDays = Math.max(1, dayDiff(ma[n-1].d, t0));
   var X=function(i){ return padL + (W-padL-padR) * (dayDiff(ma[i].d, t0) / totalDays); };
@@ -3766,7 +3771,7 @@ function chartSVG(ma){
      pill showed a number with nothing on screen connecting them, so a rate
      that moved had no explanation. Shade the week each average covers, mark
      the two points, and draw the step between them. The dates stay out of the
-     plot \u2014 they collided with the axis \u2014 and live in the caption instead. */
+     plot — they collided with the axis — and live in the caption instead. */
   var marks = "", wr = weeklyRate();
   if(wr){
     var iOf = function(dstr){
@@ -3800,7 +3805,7 @@ function chartSVG(ma){
         'stroke-width="1.3" stroke-dasharray="4 3" opacity=".85"/>';
       /* No numbers in the plot. They collided with the phase-target label and
          with each other whenever the two weeks sat level, and the caption
-         underneath already states both in bold \u2014 the chart's job here is to
+         underneath already states both in bold — the chart's job here is to
          show WHERE the two weeks are, not to repeat their values. */
       marks += '<circle cx="'+xA.toFixed(1)+'" cy="'+yA.toFixed(1)+'" r="4" '+
         'fill="var(--card)" stroke="var(--label2)" stroke-width="2"/>'+
@@ -4152,7 +4157,7 @@ function rmWindow(i){
    depending only on the order you logged them, and removing it undid neither.
 
    The rule: the app may never un-ask what it already asked. A day with food
-   keeps its recorded target and its frozen deficit and is MARKED instead \u2014
+   keeps its recorded target and its frozen deficit and is MARKED instead —
    the mark changes whether the day is graded, not what it was worth. A day
    with no food has no ate-versus-asked record to falsify, so nothing can be
    invented by re-stamping it properly. */
@@ -4222,7 +4227,7 @@ function setP(k,v){
      before you retype it. Falling back to DEFAULT_PROFILE there quietly
      overwrote real settings with factory ones: clearing goal weight to retype
      it set it to 75, clearing lean mass set it to 0. An empty field is someone
-     mid-edit, not someone asking for the default \u2014 so leave the stored value
+     mid-edit, not someone asking for the default — so leave the stored value
      alone and let the next render put it back. */
   var raw = String(v == null ? "" : v).trim();
   if(raw === "") return;
@@ -4674,7 +4679,7 @@ function wipe(){
   /* Auto-sync is deliberately NOT carried over. save() below queues a push;
      eight seconds later push() fetches the remote, finds localLogged === 0,
      treats this as a fresh device and merges every day, weigh-in and food
-     straight back in \u2014 then writes the restored state to GitHub. The one
+     straight back in — then writes the restored state to GitHub. The one
      control labelled destructive was a no-op that looked like it had worked. */
   var hadAuto = !!S.profile.ghAuto;
   var keepGh = {ghRepo:S.profile.ghRepo, ghPath:S.profile.ghPath, ghAuto:0};
@@ -5229,7 +5234,7 @@ function render(){
 
   renderTabs();
   /* instant, not animated. The springs start at 0, so an animated first paint
-     spends ~500 ms counting the ring figure up from zero \u2014 and the glance
+     spends ~500 ms counting the ring figure up from zero — and the glance
      this app is built for is shorter than that. Opening Today 8-12 times a day
      meant the first moment of every open showed a number that was not true.
      Logging food still animates: syncToday() with no argument is the in-place
