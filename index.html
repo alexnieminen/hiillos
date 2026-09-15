@@ -1646,8 +1646,9 @@ function frozenBase(t, def){ return frozenNet(t) + Math.max(0, +def || 0); }
    a frozen day's base with no edit to that day at all. Only the edit survives
    the subtraction. */
 function rawBase(d){
-  var np = neatParts(d);
-  return bmrAt(d) + np.idle + np.walk + gymKcalFor(d) + (np.fb ? np.fb.credited : 0);
+  var np = neatParts(d), x = peek(d);
+  return bmrAt(d) + np.idle + np.walk + gymKcalFor(d) + (np.fb ? np.fb.credited : 0) +
+         pnum(x && x.extra, 0);
 }
 
 function burn(d, raw){
@@ -1659,9 +1660,14 @@ function burn(d, raw){
   var walk  = np.walk;        // walking, priced per metre and compensated
   var gym   = gymKcalFor(d);
   var fbCal = fb ? fb.credited : 0;
+  /* A flat manual add for anything the model has no calculator for yet —
+     temporary, until there is one. Treated exactly like gym or football: it
+     rides the same measured correction, the same frozen/live split, and the
+     same per-day re-pricing when you edit a past day. */
+  var extra = pnum(x.extra, 0);
 
   var cal  = raw ? 1 : calFactor();                 // measured correction
-  var rawLive = bmr + neat + walk + gym + fbCal;        // before the measured correction
+  var rawLive = bmr + neat + walk + gym + fbCal + extra; // before the measured correction
   var live = rawLive * cal;                            // what TODAY'S model makes of it
 
   var e   = eaten(d);
@@ -1721,7 +1727,7 @@ function burn(d, raw){
      NOTE bmr was returned UNSCALED by cal while base has always included
      bmr*cal — a pre-existing mismatch that made the composition bar and PAL
      under-count resting whenever the measured correction was on. */
-  var bmrShown = bmr * cal, mvLive = (neat + walk + gym + fbCal) * cal;
+  var bmrShown = bmr * cal, mvLive = (neat + walk + gym + fbCal + extra) * cal;
   var kb = 1, km = 1;
   if(frozen !== null && live > 0){
     if(mvLive > 50 && base > bmrShown) km = (base - bmrShown)/mvLive;
@@ -1730,7 +1736,7 @@ function burn(d, raw){
   }
 
   return { bmr:bmrShown*kb, neat:neat*cal*km, steps:walk*cal*km,
-           gym:gym*cal*km, football:fbCal*cal*km,
+           gym:gym*cal*km, football:fbCal*cal*km, extra:extra*cal*km,
            fb:fb, base:base, target:target, deficit:def, eaten:e,
            tef:tefNow, tefEarned:tefEarned, tefLeft:tefLeft,
            tefPlanned:tefPlanned, tefRate:r,
@@ -2711,6 +2717,9 @@ function viewToday(d){
     '<div class="note js-drift" style="display:none;padding-top:0;color:var(--label3)"></div>'+
     '<div style="padding:0 16px 13px"><a class="t-cap js-mx" data-press '+
       'style="display:none;color:var(--ember)"></a></div>'+
+    /* Temporary: a flat manual add for anything burned that the app can't
+       calculate yet. Remove once there's a real calculator for it. */
+    numRow("Extra", "", x.extra||"", "setDay('extra',this.value)", "5", "kcal")+
   '</div>';
 
   h += '<div class="sectionhead"><h2 class="t-section">Add food</h2>'+
@@ -4384,7 +4393,9 @@ function copyDay(){
   lines.push("Out: "+Math.round(b.actual)+" (BMR "+Math.round(b.bmr)+
     ", idle "+Math.round(b.neat)+", walking "+Math.round(b.steps)+
     " on "+Math.round(b.np.walkSteps)+" steps, gym "+Math.round(b.gym)+
-    ", football "+Math.round(b.football)+", TEF "+Math.round(b.tefEarned)+")");
+    ", football "+Math.round(b.football)+
+    (b.extra ? ", extra "+Math.round(b.extra) : "")+
+    ", TEF "+Math.round(b.tefEarned)+")");
   lines.push("Target was "+Math.round(b.target)+" on a "+Math.round(b.deficit)+" deficit");
   lines.push("Real deficit: "+Math.round(b.actual-e.k));
   copy(lines.join("\n"), "Day copied — round-trips straight back in");
