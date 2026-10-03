@@ -22,14 +22,13 @@
    light-mode equivalent, and the whole idea is a slow glow in the dark. */
 :root{
   color-scheme: dark;
-  /* Measured on a phone: --card on --bg was 1.07:1, --raised on --card 1.10:1,
-     the hairline 1.29:1 and the ring's unfilled track 1.30:1. Every TEXT token
-     was fine, so in daylight the words survived and every container, divider
-     and track vanished — Today and Setup collapsed into one undifferentiated
-     column of sentences, and the ring stopped reading as a fraction because you
-     could not see the whole. iOS dark grouped tables sit near 1.17:1; these now
-     do too. --bg is untouched: the brand mark's PNG ground is matched to it. */
-  --bg:#0A0908; --card:#221D16; --raised:#332A1F;
+  /* Near-black cards, as they were before 14 Sep, by choice. The lifted ones
+     (#221D16 and #332A1F, with brighter hairlines and ring track) showed their
+     edges better in daylight, but the app is meant to read as embers on black.
+     If containers vanish in bright light, lift them in the prefers-contrast
+     block below rather than here. --bg is untouched: the brand mark's PNG
+     ground is matched to it. */
+  --bg:#0A0908; --card:#16130F; --raised:#221C15;
   /* label2 and label3 carry every "where this number came from" sentence in
      the app, which is the whole reason it exists. At .32 the third tier
      measured 2.60:1 on the background — below even the 3:1 floor for large
@@ -37,15 +36,13 @@
      in daylight it was simply gone. .50 and .64 give 4.83:1 and 7.02:1 and
      still read as three distinct tiers. */
   --label:#FFF4E8; --label2:rgba(255,238,222,.64); --label3:rgba(255,238,222,.50);
-  --sep:rgba(255,190,130,.22);      /* ~1.5:1 — still a hairline, now a visible one */
+  --sep:rgba(255,178,110,.13);
 
   /* An ORDERED heat ramp, not four interchangeable oranges. A fire has a
      gradient, so the palette can carry meaning instead of just decorating:
      banked coal for the energy you spend lying still, flame for the energy
      you spend on purpose. Used in that order by the composition bar. */
-  --char:#6B2109;       /* h1 — banked, nearly out: resting metabolism.
-                           Raised with --card so it stays the dimmest step of
-                           the ramp instead of sinking into the new surface. */
+  --char:#5A1B08;       /* h1 — banked, nearly out: resting metabolism */
   --ember-lo:#8E2E0B;   /* h2 — smouldering: incidental movement */
   --ember:#FF7A18;      /* h3 — the live coal, and the primary accent */
   --ember-hi:#FFB43D;   /* h4 — flame: deliberate training */
@@ -57,11 +54,11 @@
   /* The fire banked: a maintenance stretch on the charts. The only real blue
      in the app (--blue below is a legacy alias for the ember), so it cannot
      be mistaken for the ember trend it interrupts or the green target line —
-     checked against both under protan and deutan simulation, and 7.5:1 on
+     checked against both under protan and deutan simulation, and 8.3:1 on
      --card. */
   --maint:#5AB4FF;
 
-  --fill:rgba(255,170,90,.17);      /* ring track, and the empty half of a macro bar */
+  --fill:rgba(255,170,90,.11);
   --fill2:rgba(255,170,90,.18);
   --press:rgba(255,170,90,.16);
   --chrome:rgba(14,12,10,.74);
@@ -1717,9 +1714,8 @@ function frozenBase(t, def){ return frozenNet(t) + Math.max(0, +def || 0); }
    a frozen day's base with no edit to that day at all. Only the edit survives
    the subtraction. */
 function rawBase(d){
-  var np = neatParts(d), x = peek(d);
-  return bmrAt(d) + np.idle + np.walk + gymKcalFor(d) + (np.fb ? np.fb.credited : 0) +
-         pnum(x && x.extra, 0);
+  var np = neatParts(d);
+  return bmrAt(d) + np.idle + np.walk + gymKcalFor(d) + (np.fb ? np.fb.credited : 0);
 }
 
 function burn(d, raw){
@@ -1731,14 +1727,9 @@ function burn(d, raw){
   var walk  = np.walk;        // walking, priced per metre and compensated
   var gym   = gymKcalFor(d);
   var fbCal = fb ? fb.credited : 0;
-  /* A flat manual add for anything the model has no calculator for yet —
-     temporary, until there is one. Treated exactly like gym or football: it
-     rides the same measured correction, the same frozen/live split, and the
-     same per-day re-pricing when you edit a past day. */
-  var extra = pnum(x.extra, 0);
 
   var cal  = raw ? 1 : calFactor();                 // measured correction
-  var rawLive = bmr + neat + walk + gym + fbCal + extra; // before the measured correction
+  var rawLive = bmr + neat + walk + gym + fbCal;        // before the measured correction
   var live = rawLive * cal;                            // what TODAY'S model makes of it
 
   var e   = eaten(d);
@@ -1798,7 +1789,7 @@ function burn(d, raw){
      NOTE bmr was returned UNSCALED by cal while base has always included
      bmr*cal — a pre-existing mismatch that made the composition bar and PAL
      under-count resting whenever the measured correction was on. */
-  var bmrShown = bmr * cal, mvLive = (neat + walk + gym + fbCal + extra) * cal;
+  var bmrShown = bmr * cal, mvLive = (neat + walk + gym + fbCal) * cal;
   var kb = 1, km = 1;
   if(frozen !== null && live > 0){
     if(mvLive > 50 && base > bmrShown) km = (base - bmrShown)/mvLive;
@@ -1807,7 +1798,7 @@ function burn(d, raw){
   }
 
   return { bmr:bmrShown*kb, neat:neat*cal*km, steps:walk*cal*km,
-           gym:gym*cal*km, football:fbCal*cal*km, extra:extra*cal*km,
+           gym:gym*cal*km, football:fbCal*cal*km,
            fb:fb, base:base, target:target, deficit:def, eaten:e,
            tef:tefNow, tefEarned:tefEarned, tefLeft:tefLeft,
            tefPlanned:tefPlanned, tefRate:r,
@@ -2896,9 +2887,6 @@ function viewToday(d){
     '</div>'+
     '<div class="t-cap js-markhint" style="display:none;color:var(--label3);'+
       'padding:0 16px 13px;margin-top:-4px;line-height:1.45"></div>'+
-    /* Temporary: a flat manual add for anything burned that the app can't
-       calculate yet. Remove once there's a real calculator for it. */
-    numRow("Extra", "", x.extra||"", "setDay('extra',this.value)", "5", "kcal")+
   '</div>';
 
   h += '<div class="sectionhead"><h2 class="t-section">Add food</h2>'+
@@ -4970,9 +4958,7 @@ function copyDay(){
   lines.push("Out: "+Math.round(b.actual)+" (BMR "+Math.round(b.bmr)+
     ", idle "+Math.round(b.neat)+", walking "+Math.round(b.steps)+
     " on "+Math.round(b.np.walkSteps)+" steps, gym "+Math.round(b.gym)+
-    ", football "+Math.round(b.football)+
-    (b.extra ? ", extra "+Math.round(b.extra) : "")+
-    ", TEF "+Math.round(b.tefEarned)+")");
+    ", football "+Math.round(b.football)+", TEF "+Math.round(b.tefEarned)+")");
   lines.push("Target was "+Math.round(b.target)+" on a "+Math.round(b.deficit)+" deficit");
   lines.push("Real deficit: "+Math.round(b.actual-e.k));
   copy(lines.join("\n"), "Day copied — round-trips straight back in");
