@@ -2161,7 +2161,7 @@ function parseBlock(text){
    recompute over your entire history. On a few hundred weigh-ins that is
    visible input lag on a phone. */
 var _swCache = null, _maCache = null;
-function invalidateMA(){ _swCache = null; _maCache = null; _goalCache = null; _fitCache = false; }
+function invalidateMA(){ _swCache = null; _maCache = null; _goalCache = null; }
 function sortedWeights(){
   if(_swCache) return _swCache;
   _swCache = S.weights.filter(function(q){ return q && q.d && +q.w > 0; })
@@ -2204,126 +2204,12 @@ function weeklyRate(){
   return {rate:(best.avg - last.avg) / span * 7, span:span, from:best, to:last, points:arr.length};
 }
 
-/* THE RATE, FITTED RATHER THAN DIFFERENCED.
-   The rate used to be two 7-day averages a week apart. Each carries about
-   0.19 kg of water noise, so their difference swung by about ±0.27 kg/week —
-   the width of the whole on-target band — and every pause broke it outright:
-   the morning after a week at maintenance it compared the glycogen-heavy week
-   with the one before and called it gaining, four days running.
-
-   So the rate that gets judged is now the straight line through your
-   weigh-ins over the last FIT_DIET_DAYS days you were actually dieting. The
-   line's clock stops on off days, which roughly break even, and the mornings
-   carrying their water are left out: every morning inside an off stretch and
-   the 2 after it — 3 after a stretch of 4 days or more, which is how long the
-   glycogen took to clear after your exam week. Fitting every clean morning
-   instead of two averages roughly halves the noise, and what comes out is a
-   rate per diet day: the thing a deficit actually predicts. Short of clean
-   mornings it returns nothing rather than guessing. */
-var FIT_DIET_DAYS = 21, FIT_LOOKBACK = 63, FIT_MIN_POINTS = 6, FIT_MIN_SPAN = 10;
-var _fitCache = false;                 // false = not computed since the last change
-function trendFit(){
-  if(_fitCache !== false) return _fitCache;
-  _fitCache = null;
-  var arr = sortedWeights();
-  if(arr.length < FIT_MIN_POINTS) return null;
-  var end = arr[arr.length-1].d, start = end, diet = 0;
-  for(var back = 1; back <= FIT_LOOKBACK && diet < FIT_DIET_DAYS; back++){
-    start = shift(end, -back);
-    if(!offDay(start)) diet++;
-  }
-  var byDay = {};
-  arr.forEach(function(q){ byDay[q.d] = q.w; });
-  /* The first week of a cut dumps glycogen and its water just as the end of a
-     pause does — yours went 93.9 to 91.1 in five days — so those mornings are
-     out too, or the first three weeks report a rate no deficit produced. */
-  var cs = cutStart(), csWet = cs ? shift(cs, 7) : null;
-  /* Walk from a week before the window so an off stretch just outside it
-     still disqualifies the mornings it soaked. A morning reflects the days
-     before it, so it is judged before the day's own balance is counted. */
-  var t = 0, lastOff = null, run = 0, lastRun = 0, pts = [], dropped = [], line = [];
-  var defSum = 0, defN = 0, offN = 0;
-  for(var k = shift(start, -7); k <= end; k = shift(k, 1)){
-    if(k >= start){
-      line.push({d:k, t:t});
-      if(byDay[k] !== undefined){
-        var water = (csWet && k <= csWet) ||
-                    (lastOff !== null && dayDiff(k, lastOff) <= (lastRun >= 4 ? 3 : 2));
-        (water ? dropped : pts).push({d:k, w:byDay[k], t:t});
-      }
-    }
-    if(offDay(k)){
-      run++; lastOff = k; lastRun = run;
-      if(k >= start && k < end) offN++;
-    } else {
-      run = 0; t++;
-      if(k >= start && k < end){ defSum += deficitFor(k); defN++; }
-    }
-  }
-  if(pts.length < FIT_MIN_POINTS || pts[pts.length-1].t - pts[0].t < FIT_MIN_SPAN) return null;
-  var n = pts.length, mt = 0, mw = 0;
-  pts.forEach(function(p){ mt += p.t; mw += p.w; });
-  mt /= n; mw /= n;
-  var sxx = 0, sxy = 0;
-  pts.forEach(function(p){ sxx += (p.t-mt)*(p.t-mt); sxy += (p.t-mt)*(p.w-mw); });
-  var b = sxy / sxx, a = mw - b*mt, ss = 0;
-  pts.forEach(function(p){ var r = p.w - (a + b*p.t); ss += r*r; });
-  var se = n > 2 ? Math.sqrt(ss / (n-2) / sxx) * 7 : null;
-  _fitCache = {rate:-b*7, se:se, n:n, start:start, end:end, dietDays:defN, offDays:offN,
-               cutStart: !!(csWet && dropped.some(function(q){ return q.d <= csWet; })),
-               deficit: defN ? defSum/defN : 0, pts:pts, dropped:dropped,
-               line: line.map(function(q){ return {d:q.d, w:a + b*q.t}; })};
-  return _fitCache;
-}
-/* The first diet day with food on it: where the cut, as far as the app
-   knows, began. */
-function cutStart(){
-  var ks = Object.keys(S.days).filter(function(k){
-    var x = S.days[k];
-    return x && x.entries && x.entries.length && !offDay(k);
-  }).sort();
-  return ks.length ? ks[0] : null;
-}
-/* What the fit should have produced: the deficits its own diet days ran on,
-   not today's — a phase change would otherwise grade three weeks of the old
-   phase against the new one. */
-function fitTarget(tf){
-  var tol = Math.max(0.1, Math.min(0.8, +S.profile.rateTol || 0.35));
-  var mid = tf.deficit * 7 / kcalPerKg();
-  return {mid:mid, low:mid*(1-tol), high:mid*(1+tol), deficit:tf.deficit, hold:false};
-}
-/* Does this week's 7-day comparison reach into an off stretch, or the
-   mornings still carrying its water? Then it is reporting glycogen. */
-function weekHasWater(wr){
-  for(var k = shift(wr.from.d, -9); k < wr.to.d; k = shift(k, 1)) if(offDay(k)) return k;
-  return null;
-}
-/* What the Trend tab judges, and against what. On a pause: this week alone,
-   against the pause band, because the question is whether the scale is flat
-   give or take the glycogen. Otherwise the fit, against the deficits its own
-   days ran on. Without enough clean mornings for a fit, this week stands in —
-   unless it straddles an off stretch, and then nothing is judged until the
-   water has had time to clear, and the card says when that is. */
+/* What the Trend tab judges: this week's 7-day average against last week's,
+   over every weigh-in, against the deficit in force today — the pause band
+   while on maintenance. */
 function judged(){
-  var wr = weeklyRate(), tr = targetRate(), tf = trendFit();
-  if(tr.hold){
-    /* For its first week a pause's 7-day numbers are still mostly the diet
-       days before it, so "still coming down" there is the deficit landing,
-       not a pause being under-eaten. Judge the scale against the pause only
-       once the week is the pause's own. */
-    var wd = tr.windowDay;
-    if(wr && (wd === 0 || wd > 7)) return {rate:wr.rate, tr:tr, kind:"week", week:wr, fit:tf};
-    var win = planWindowFor(today);
-    return {blocked:true, pause:true, rate:null, week:wr, fit:tf,
-            until: win && win.to < shift(today, 7 - wd) ? shift(win.to, 1) : shift(today, 8 - wd)};
-  }
-  if(tf) return {rate:tf.rate, tr:fitTarget(tf), kind:"fit", week:wr, fit:tf};
-  if(!wr) return null;
-  var wet = weekHasWater(wr);
-  if(!wet) return {rate:wr.rate, tr:tr, kind:"week", week:wr, fit:null};
-  var lastOff = wet;
-  for(var k = wet; k < wr.to.d; k = shift(k, 1)) if(offDay(k)) lastOff = k;
-  return {blocked:true, rate:null, week:wr, until:shift(lastOff, 10), off:lastOff};
+  var wr = weeklyRate();
+  return wr ? {rate:wr.rate, tr:targetRate(), kind:"week", week:wr} : null;
 }
 function dayDiff(a,b){
   var pa=a.split("-"), pb=b.split("-");
@@ -3475,8 +3361,7 @@ function viewTrends(){
       '<div class="t-foot" style="color:var(--label2);margin-top:4px">kg · 7-day average</div>'+
       rateHead(J, last.avg)+
       '</div>'+rangeSeg(span)+chartSVG(ma, span)+maintLegend(span, !rateLegend(J))+rateLegend(J)+'</div>';
-    if(J && !J.blocked) h += adviceCard(J,P);
-    else if(J && J.pause) h += pauseCard();
+    if(J) h += adviceCard(J,P);
   }
   /* The waist comes straight after the scale, on the same dates, because the
      pair is the reading: the scale carries water and glycogen, the tape
@@ -3662,7 +3547,7 @@ function waistSection(wr, span){
            : '<span class="pill o">'+(d>0?"+":"")+n1(d)+' cm · flat</span>';
 
   var msg;
-  var rate = wr && !wr.blocked ? wr.rate : null;
+  var rate = wr ? wr.rate : null;
   var tr = (wr && wr.tr) || targetRate(), down = d <= -0.3, win = planWindowFor(today);
   var steady = "Waist is holding steady. Over a couple more weeks it should track your weight down; "+
     "if the scale falls and this doesn't, the loss isn't mostly fat.";
@@ -3689,10 +3574,7 @@ function waistSection(wr, span){
         "or you're eating under the maintenance figure — easy to do during a hard week. Harmless "+
         "for a few days, but the break only does its job if you eat it.";
   } else if(rate === null){
-    msg = down && wr && wr.blocked
-      ? "Waist is coming down. The scale\u2019s rate is on hold while the water from maintenance "+
-        "clears, so for now the tape is the better read \u2014 and it says the deficit is working."
-      : down
+    msg = down
       ? "Waist is coming down. The scale needs a week or so of recent weigh-ins before it can put a "+
         "rate on anything, so for now the tape is the better early read — and it says the deficit "+
         "is working. Keep weighing in each morning and this starts checking the two against each other."
@@ -3799,11 +3681,8 @@ function adviceCard(J, P){
   return '<div class="card"><div style="padding:14px 16px">'+
     '<div class="t-head" style="margin-bottom:5px">What to do</div>'+
     '<div class="t-sub" style="color:var(--label2);line-height:1.5">'+msg+'</div>'+
-    '<div class="t-cap" style="color:var(--label3);margin-top:9px">'+(J.kind === "fit"
-      ? 'Based on '+J.fit.n+' clean weigh-ins across your last '+J.fit.dietDays+' days on the deficit'+
-        (J.fit.dropped.length ? ', with the '+J.fit.dropped.length+' water-heavy mornings around '+
-          'maintenance left out' : '')+'.'
-      : 'Based on '+wk.span+' days of 7-day averages, '+wk.points+' weigh-ins.')+'</div></div></div>';
+    '<div class="t-cap" style="color:var(--label3);margin-top:9px">Based on '+wk.span+
+      ' days of 7-day averages, '+wk.points+' weigh-ins.</div></div></div>';
 }
 /* How many days between two dates fall inside a maintenance window. Those
    days cost calendar time but produce no loss, so the forecast has to carry
@@ -4085,25 +3964,11 @@ function partialReview(days){
    scale as a unit fixes that, and leaves room for the things the chart was
    missing: where the current phase is trying to get to, and what the band
    boundaries are. */
-/* The chart marks what the rate is made of; this says it in words, because a
-   line on a chart is a hint and the arithmetic is the point. */
+/* The chart marks the two weeks the rate is made of; this says what they are
+   in words, because a shaded rectangle is a hint and the arithmetic is the
+   point. */
 function rateLegend(J){
-  if(!J || J.blocked) return "";
-  if(J.kind === "fit"){
-    var f = J.fit;
-    return '<div class="t-cap" style="color:var(--label3);padding:2px 16px 14px;line-height:1.55">'+
-      '<span style="color:var(--ember)">\u25ac</span> the rate is the straight line through your <b>'+
-      f.n+'</b> clean weigh-ins since <b>'+fmtShortMid(f.start)+'</b>, the last '+f.dietDays+
-      ' days you were dieting: <b>'+n2(f.rate)+' kg a week</b>'+
-      (f.se !== null ? ', give or take '+n2(f.se) : '')+'. '+
-      (f.offDays ? 'It runs flat across the '+f.offDays+' day'+(f.offDays===1?'':'s')+
-        ' off the deficit, which aren\u2019t meant to lose anything. ' : '')+
-      (f.dropped.length ? 'Hollow dots are the '+f.dropped.length+' morning'+
-        (f.dropped.length===1?'':'s')+' it leaves out'+
-        (f.cutStart ? ', in the first week of the cut and' : ',')+
-        ' in and just after days off the deficit, when the scale is carrying glycogen and water. ' : '')+
-      'This week alone is quicker to react, but it swings with every salty dinner.</div>';
-  }
+  if(!J) return "";
   var wr = J.week || J;
   if(!wr || !wr.from) return "";
   var d = wr.from.avg - wr.to.avg;
@@ -4120,57 +3985,14 @@ function rateLegend(J){
     'what it weighs.'+
     '</div>';
 }
-/* Under the headline weight. The pill is the stable reading, the fit; the
-   line under it is the quick one — this week on its own, kept beside the fit
-   rather than instead of it — with the rate as a share of body weight, the
-   usual way a cut's pace is judged, since 0.7 kg a week asks more of an 80 kg
-   body than a 95 kg one. */
+/* Under the headline weight: the verdict, and the rate as a share of body
+   weight — the usual way a cut's pace is judged, since 0.7 kg a week asks
+   more of an 80 kg body than of a 95 kg one. */
 function rateHead(J, w){
-  var cap = function(t){
-    return '<div class="t-cap" style="color:var(--label3);margin-top:7px;line-height:1.45">'+t+'</div>';
-  };
   if(!J) return '<div class="note" style="padding:8px 0 0">Need a few more days for a reliable rate.</div>';
-  var tf = J.fit, trend = "";
-  if(tf){
-    var ft = fitTarget(tf);
-    trend = 'diet-day trend '+n2(tf.rate)+' kg/week'+
-      (tf.rate >= ft.low && tf.rate <= ft.high ? ', on target' : '');
-  }
-  if(J.blocked){
-    var win = planWindowFor(today), gm = !win && goalMaint(today);
-    var what = !J.pause ? 'Rate on hold'
-             : win ? 'Maintenance \u00b7 '+esc(win.label || 'pause')
-             : gm ? 'Holding '+n1(gm.goal)+' kg' : 'Maintenance';
-    return '<div class="note" style="padding:10px 0 0;line-height:1.5"><b>'+what+'.</b> '+
-      (J.pause
-        ? 'The scale isn\u2019t judged in a pause\u2019s first week: its 7-day numbers are still '+
-          'the diet days before it, and then the glycogen coming back.'
-        : 'The last week runs into maintenance, so the scale is carrying its water rather than '+
-          'telling you about fat.')+
-      ' Judged again from '+fmtShortMid(J.until)+'.</div>'+(trend ? cap(trend.charAt(0).toUpperCase()+trend.slice(1)) : '');
-  }
-  var parts = [(J.rate < 0 ? 'gaining ' : '')+pct1(Math.abs(J.rate) / w * 100)+' of body weight a week'];
-  if(J.kind === "fit" && J.week){
-    var dw = J.week.to.avg - J.week.from.avg;
-    parts.push('this week '+(dw <= 0 ? '\u2212' : '+')+n2(Math.abs(dw))+' kg'+
-      (weekHasWater(J.week) ? ' (maintenance water)' : ''));
-  } else if(J.kind === "week" && trend){
-    parts.push(trend);
-  }
-  return '<div style="margin-top:10px">'+ratePill(J.rate, J.tr)+'</div>'+cap(parts.join(' \u00b7 '));
-}
-/* A pause in its first week gets the explanation instead of a verdict. */
-function pauseCard(){
-  var win = planWindowFor(today), gm = !win && goalMaint(today);
-  var why = win ? 'for '+esc(win.label || 'this pause') : gm ? 'to hold '+n1(gm.goal)+' kg' : 'for this pause';
-  return '<div class="card"><div style="padding:14px 16px">'+
-    '<div class="t-head" style="margin-bottom:5px">What to do</div>'+
-    '<div class="t-sub" style="color:var(--label2);line-height:1.5">You are eating at maintenance '+why+
-    '. Expect the scale to go up <b>0.5 to 1.5 kg</b> over the first few days: coming off a deficit '+
-    'refills muscle glycogen, and every gram of it holds about 3 g of water. None of it is fat, and it '+
-    'leaves again in the first days back on the deficit \u2014 the rate leaves those mornings out, so '+
-    'they won\u2019t read as gaining. Nothing to change. Keep logging so the days still count.</div>'+
-    '</div></div>';
+  return '<div style="margin-top:10px">'+ratePill(J.rate, J.tr)+'</div>'+
+    '<div class="t-cap" style="color:var(--label3);margin-top:7px;line-height:1.45">'+
+      (J.rate < 0 ? 'gaining ' : '')+pct1(Math.abs(J.rate) / w * 100)+' of body weight a week</div>';
 }
 /* One date span for the weight chart and the waist chart under it, so a date
    sits at the same x on both. Normally that is just the weigh-ins; a tape
@@ -4264,10 +4086,6 @@ function chartSVG(ma, span){
      Anything over a 3-day hole is drawn faint and dashed: the dots are
      measurements, the solid line joins measurements that are close enough to
      join, and the dashed one is the app guessing across a hole. */
-  /* What the headline rate is made of, so the chart can show it: the fitted
-     line, and which mornings it leaves out. */
-  var J = judged(), tf = J && J.kind === "fit" ? J.fit : null, wet = {};
-  if(tf) tf.dropped.forEach(function(q){ wet[q.d] = 1; });
   var dots="", segs=[], run="", GAPD=3;
   ma.forEach(function(p,i){
     var x=X(i).toFixed(1), y=Y(p.w).toFixed(1);
@@ -4278,9 +4096,7 @@ function chartSVG(ma, span){
     } else {
       run += (run?"L":"M")+x+","+y;
     }
-    dots += wet[p.d]
-      ? '<circle cx="'+x+'" cy="'+y+'" r="2.4" fill="var(--card)" stroke="var(--label3)" stroke-width="1.2"/>'
-      : '<circle cx="'+x+'" cy="'+y+'" r="2.4" fill="var(--label3)"/>';
+    dots += '<circle cx="'+x+'" cy="'+y+'" r="2.4" fill="var(--label3)"/>';
   });
   if(run) segs.push({d:run, gap:false});
   var raw = segs.map(function(sg){
@@ -4366,22 +4182,7 @@ function chartSVG(ma, span){
      that moved had no explanation. Shade the week each average covers, mark
      the two points, and draw the step between them. The dates stay out of the
      plot — they collided with the axis — and live in the caption instead. */
-  var marks = "", wr = J && J.kind === "week" ? J.week : null;
-  if(tf){
-    /* The fitted line, drawn where it was fitted: falling on diet days and
-       flat across the off days it takes as breaking even, with a dot where it
-       ends — where the fit puts you this morning. */
-    var fl = tf.line.filter(function(q){ return q.d >= t0 && q.d <= t1; });
-    if(fl.length > 1){
-      var fx = function(q){ return XT(dayDiff(q.d, t0)).toFixed(1); };
-      marks += '<path d="'+fl.map(function(q,i){ return (i?"L":"M")+fx(q)+","+Y(q.w).toFixed(1); }).join("")+
-        '" fill="none" stroke="var(--ember)" stroke-width="1.5" stroke-dasharray="5 4" '+
-        'stroke-linejoin="round" opacity=".9"/>';
-      var fe = fl[fl.length-1];
-      marks += '<circle cx="'+fx(fe)+'" cy="'+Y(fe.w).toFixed(1)+'" r="4.6" '+
-        'fill="var(--ember)" stroke="var(--card)" stroke-width="1.5"/>';
-    }
-  }
+  var marks = "", wr = weeklyRate();
   if(wr){
     var iOf = function(dstr){
       for(var q=0;q<n;q++) if(ma[q].d === dstr) return q;
