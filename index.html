@@ -253,6 +253,20 @@ textarea{background:var(--fill); border-radius:var(--r-ctl); padding:11px 13px; 
 .seg button{flex:1; position:relative; z-index:1; font-size:14px; font-weight:600;
   letter-spacing:-.006em; color:var(--label); background:none; border:none; border-radius:8px;
   padding:8px 4px; cursor:pointer}
+/* A day's sport sessions. Rows rather than segments, so ten still read as a
+   list and not a wall of chips: a numbered disc to tell them apart, what each
+   was worth on the right, and the one in the editor lit the way a set mark is.
+   The Add row is the only ember text in the card. */
+.sess{cursor:pointer}
+.sess .num{flex:0 0 auto; width:28px; height:28px; border-radius:50%; display:flex;
+  align-items:center; justify-content:center; background:var(--fill); color:var(--label2);
+  font-size:13px; font-weight:600; letter-spacing:0; font-variant-numeric:tabular-nums}
+.sess.on{background:color-mix(in srgb,var(--ember) 11%,var(--card))}
+.sess.on .num{background:var(--ember); color:#1A0E05}
+.sess.add .num{background:none; color:var(--ember); font-size:19px; font-weight:400;
+  border:1.5px dashed color-mix(in srgb,var(--ember) 60%,transparent)}
+.sess.add .ttl{color:var(--ember); font-weight:600}
+.sess-tot span:first-child{color:var(--label2)}
 /* Was ~28x24. The glyph stays 20px and the row keeps its height; the added
    area is dead space at the card's edge, so nothing else moves closer. */
 .del{color:var(--red); font-size:20px; background:none; border:none; cursor:pointer;
@@ -1638,7 +1652,10 @@ var SPORTS = [
    presets:[["Trail, 2 h",120,105],["Hilly, 3 h",180,115]]},
   {id:"other",     name:"Other",      met:null, presets:[]}
 ];
-var SPORT_MAX = 3;
+/* Ten a day. The sessions are listed rows, not segments, so ten still read
+   at a glance; the burn needs no cap of its own, since idle time already
+   bottoms out at zero however many minutes they add up to. */
+var SPORT_MAX = 10;
 function sportById(id){
   for(var i=0;i<SPORTS.length;i++) if(SPORTS[i].id === id) return SPORTS[i];
   return SPORTS[SPORTS.length-1];
@@ -3033,9 +3050,14 @@ function viewToday(d){
       (x.gym?"checked":"")+' onchange="setDay(\'gym\',this.checked)"></label>'+
     '<div class="row ctl" data-press onclick="nav(\'sport\')" style="cursor:pointer">'+
       '<div class="grow"><div class="ttl t-body">Sport</div>'+
-      '<div class="sub2 t-foot">'+(b.sp ? b.sp.sessions.map(function(q){
-        return esc(q.sport.name)+" "+Math.round(q.mins)+" min"; }).join(" \u00b7 ")+" \u00b7 tap to edit"
-        : "not logged \u2014 tap to add")+'</div></div>'+
+      /* two sessions still fit by name; past that the line would wrap into
+         a paragraph, so it counts them instead */
+      '<div class="sub2 t-foot">'+(!b.sp ? "not logged \u2014 tap to add"
+        : (b.sp.sessions.length > 2
+            ? b.sp.sessions.length+" sessions \u00b7 "+fmtMins(b.sp.mins)
+            : b.sp.sessions.map(function(q){
+                return esc(q.sport.name)+" "+Math.round(q.mins)+" min"; }).join(" \u00b7 "))+
+          " \u00b7 tap to edit")+'</div></div>'+
       '<span class="val big t-body">'+(b.sport?Math.round(b.sport):"\u2014")+'</span><span class="chev">\u203a</span></div>'+
 
     '<button class="disc" data-press aria-expanded="'+(burnOpen?"true":"false")+'" '+
@@ -3176,6 +3198,11 @@ function refreshEntries(){
    SPORT VIEW
    ================================================================= */
 var sportIdx = 0;                  // which of the day's sessions the editor shows
+/* Where the New session row sat at the last full render, or -1. A new session
+   is written by its first keystroke, and the list redraws on every one; it
+   keeps that row until the next full render, so the list never grows or
+   reflows under your thumb while you are typing into the form below it. */
+var spSlot = -1;
 /* A new session starts as the sport you did most recently, at its first
    preset, so a second badminton evening in a week is mostly already filled. */
 function draftSession(){
@@ -3187,6 +3214,69 @@ function draftSession(){
   var sp = sportById(last), pr = sp.presets[0];
   return {sport:sp.id, mode:"avg", mins: pr ? pr[1] : 60, hr: pr ? pr[2] : 130,
           km: pr && pr[3] ? pr[3] : 0, steps:0, z:{light:0,fat:0,cardio:0,peak:0}};
+}
+function fmtMins(m){
+  m = Math.round(+m || 0);
+  if(m < 60) return m+" min";
+  return Math.floor(m/60)+" h"+(m % 60 ? " "+(m % 60)+" min" : "");
+}
+/* What a session's row says under its name: how long, and what priced it. */
+function sessionLine(s, r){
+  if(!r){
+    var started = +s.mins > 0 || (s.mode === "zones" && zoneTotal(s) > 0);
+    return !started ? "not filled in yet"
+         : sportById(s.sport).distance ? "needs a distance or heart rate" : "needs a heart rate";
+  }
+  var t = fmtMins(r.mins);
+  if(r.distNet !== null) return t+" · "+n1(r.km)+" km";
+  if(r.iceNet !== null)  return t+" · "+Math.round(r.ice)+" min on ice";
+  if(s.mode === "zones") return t+" · zone minutes";
+  return t+" · avg "+Math.round(+s.hr)+" bpm";
+}
+function zoneTotal(s){
+  var z = s.z || {};
+  return (+z.light||0) + (+z.fat||0) + (+z.cardio||0) + (+z.peak||0);
+}
+function sessRow(i, title, sub, r, on, cls){
+  return '<div class="row sess'+(cls ? ' '+cls : '')+(on ? ' on' : '')+'" data-press role="tab" '+
+      'aria-selected="'+on+'" onclick="pickSession('+i+')">'+
+    '<span class="num" aria-hidden="true">'+(cls === "add" ? "+" : i+1)+'</span>'+
+    '<div class="grow"><div class="ttl t-body">'+title+'</div>'+
+      (sub ? '<div class="sub2 t-foot">'+sub+'</div>' : '')+'</div>'+
+    (cls === "add"
+      ? '<span class="val t-foot">'+i+' of '+SPORT_MAX+'</span>'
+      : '<span class="val big t-body">'+(r ? Math.round(r.credited) : "—")+'</span>')+
+  '</div>';
+}
+/* The day's sessions, each with what it was worth, then their total and room
+   for one more. Nothing on a day with none: the form below is the whole
+   story until the first session exists. */
+function sessionListHTML(){
+  var P = S.profile, w = weightAt(cur), ss = sessionsOf(peek(cur));
+  var slot = spSlot >= 0 && spSlot <= ss.length ? spSlot : -1;
+  var kept = slot >= 0 ? ss.slice(0, slot) : ss;
+  if(!kept.length) return '';
+  var tot = 0, mins = 0;
+  var h = '<div class="card" role="tablist" aria-label="Sessions">';
+  kept.forEach(function(s, i){
+    var r = sessionCalc(s, P, w, cur);
+    if(r){ tot += r.credited; mins += r.mins; }
+    h += sessRow(i, esc(sportById(s.sport).name), sessionLine(s, r), r, i === sportIdx, "");
+  });
+  if(kept.length > 1)
+    h += '<div class="kv sess-tot"><span>Total · '+fmtMins(mins)+'</span>'+
+      '<span>'+Math.round(tot)+' kcal</span></div>';
+  if(slot >= 0){
+    var d = ss[slot] || draftSession(), rd = sessionCalc(d, P, w, cur);
+    h += sessRow(slot, "New session", esc(sportById(d.sport).name)+" · "+sessionLine(d, rd), rd, true, "");
+  } else if(ss.length < SPORT_MAX){
+    h += sessRow(ss.length, "Add a session", "", null, false, "add");
+  } else {
+    h += '<div class="note">'+SPORT_MAX+' sessions, the most one day holds.</div>';
+  }
+  h += '</div>';
+  return h + '<h2 class="t-section" id="sphead" style="margin:22px 0 8px 4px">'+
+    (slot >= 0 ? "New session" : "Session "+(sportIdx+1))+'</h2>';
 }
 function viewSport(){
   var P=S.profile, x=peek(cur)||{}, w=weightAt(cur), ss=sessionsOf(x);
@@ -3201,19 +3291,9 @@ function viewSport(){
     '<p class="t-sub" style="color:var(--label2);margin:0 0 12px">'+
     (cur===today?"Today":new Date(cur+"T12:00").toLocaleDateString(undefined,{day:"numeric",month:"long"}))+'</p>';
 
-  /* the day's sessions, and room for one more */
-  if(ss.length){
-    h += '<div class="seg" role="tablist" aria-label="Sessions">'+
-      ss.map(function(q,i){
-        return '<button data-press role="tab" aria-selected="'+(i===sportIdx)+'" onclick="pickSession('+i+')"'+
-          (i===sportIdx ? ' style="background:var(--raised);border-radius:8px"' : '')+'>'+
-          esc(sportById(q.sport).name)+'</button>';
-      }).join('')+
-      (ss.length < SPORT_MAX
-        ? '<button data-press role="tab" aria-selected="'+(!saved)+'" onclick="pickSession('+ss.length+')"'+
-          (!saved ? ' style="background:var(--raised);border-radius:8px"' : '')+'>+ Add</button>' : '')+
-    '</div>';
-  }
+  /* the day's sessions, and room for more */
+  spSlot = saved ? -1 : ss.length;
+  h += '<div id="splist">'+sessionListHTML()+'</div>';
   h += '<div class="marks" role="group" aria-label="Sport" style="flex-wrap:wrap;padding:0 0 12px">'+
     SPORTS.map(function(q){
       return '<button class="btn mark ctl'+(q.id===sp.id?' on':'')+'" data-press aria-pressed="'+(q.id===sp.id)+'" '+
@@ -3351,6 +3431,9 @@ function syncSport(){
   var ss = sessionsOf(peek(cur)), r = sessionCalc(ss[sportIdx], S.profile, weightAt(cur), cur);
   var c = el("spresult");
   if(c) c.innerHTML = sportResultHTML(r, S.profile, sportIdx < ss.length, ss.length);
+  /* the row being typed into, and the total, keep up with the form */
+  var l = el("splist");
+  if(l) l.innerHTML = sessionListHTML();
 }
 /* The segmented thumb slides with a spring rather than a CSS
    transition, so tapping the other side mid-slide redirects it
@@ -5138,8 +5221,25 @@ function spPreset(i){
   });
   render(); haptic(8); toast("Preset loaded");
 }
-function pickSession(i){ sportIdx = i; render(); window.scrollTo(0,0); }
-function saveSp(){ save(); nav("today"); toast("Session saved"); }
+/* With ten sessions listed, the form can start below the fold, so a pick
+   brings its heading up into view, but only when it is not already showing:
+   a list of up to about four stays put under your thumb. */
+function pickSession(i){
+  sportIdx = i; render(); haptic(5);
+  var hd = el("sphead"), top = hd ? hd.getBoundingClientRect().top : 0;
+  if(hd && (top < 0 || top > window.innerHeight * 0.6))
+    window.scrollTo({top: Math.max(0, (window.scrollY || 0) + top - 12),
+                     behavior: reduceMotion.matches ? "auto" : "smooth"});
+  else if(!hd) window.scrollTo(0,0);
+}
+/* A new session nobody has typed into is still only a draft: nothing has
+   written it yet. Saving has to write it, or "Session saved" would be a lie
+   about the one most likely to be saved untouched, a preset night. */
+function saveSp(){
+  var drafting = sportIdx >= sessionsOf(peek(cur)).length;
+  if(drafting && sessionCalc(draftSession(), S.profile, weightAt(cur), cur)) editSession(function(){});
+  save(); nav("today"); toast("Session saved");
+}
 function rmSession(){
   var n = sessionsOf(peek(cur)).length;
   if(sportIdx >= n) return;
