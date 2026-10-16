@@ -646,6 +646,9 @@ var DEFAULT_PROFILE = {
      5-10 / 0-3% bands. On a high-protein cut the real figure lands nearer 14%
      of intake than the textbook 10-12%. */
   proteinTarget:150,
+  /* Fixed, like protein; carbs take the rest of the day (see macroSplit).
+     About 0.8 g/kg for an 85-90 kg adult: set your own. */
+  fatTarget:70,
 
   deficit:500,        // fallback only — the plan below normally decides
   goalWeight:75, goalBF:15,
@@ -696,22 +699,45 @@ function kcalPerKg(){
   return (1 - s) * KCAL_PER_KG_FAT + s * KCAL_PER_KG_LEAN;
 }
 
-/* The rate to assume for food you HAVEN'T logged yet. Built from your own
-   targets — protein at target, the rest split by energy roughly 55/45 between
-   carbs and fat — so it is your diet's real thermic cost rather than a number
-   typed into a settings screen. Clamped to the range whole-diet measurements
-   actually span, so a silly protein target can't invent free calories. */
-/* The carb and fat targets implied by the day's calorie target and the protein
-   goal — protein first, then the remainder split 55/45 by energy, which is
-   exactly the split plannedTefRate() already prices the day's digestion with.
-   The bars beside the ring used to be drawn against a hardcoded 300 g and
-   110 g: two invented constants, in the one app whose premise is that every
-   number on screen says where it came from. */
-function macroTargets(kcal, pt){
-  var pg = Math.max(0, pt === undefined ? pnum(S.profile.proteinTarget, 0) : +pt || 0);
-  if(!(kcal > 0)) return {p:pg, c:0, f:0};
-  var restK = Math.max(0, kcal - Math.min(kcal, pg*4));
-  return {p:pg, c:restK*0.55/4, f:restK*0.45/9};
+/* THE MACRO SPLIT. Protein and fat are fixed in grams; carbs take whatever
+   the day's calories leave. The two fixed ones have jobs that don't grow with
+   a football game: protein keeps muscle on a cut, fat covers hormones,
+   fat-soluble vitamins and essential fats. Carbs are what a training day
+   actually burns, and the sports-nutrition guidance scales them with load,
+   from 3-5 g/kg on a light day to 6-10 g/kg on 1-3 h of hard sport
+   (ACSM / Academy / Dietitians of Canada, 2016).
+
+   The old split sent 45% of everything above protein to fat, so a big sport
+   day asked for 137 g of fat and a carb figure well short of what the day had
+   burned. Two guardrails remain:
+     - fat never falls under 20% of the day's calories, the floor that
+       guidance gives for chronic intake, so a very big day lifts it a little;
+     - carbs never fall under 130 g, the daily minimum for the brain's glucose,
+       and fat gives way first, by up to a fifth of its target.
+
+   ft === null is the OLD split, 55/45 by energy above protein. Days frozen
+   before fat targets existed were priced with it, and recovering their burn
+   with anything else would re-price them. */
+var FAT_MIN_SHARE = 0.20, CARB_MIN_G = 130;
+function fatTargetNow(){ return Math.max(0, pnum(S.profile.fatTarget, 70)); }
+function macroSplit(kcal, pt, ft){
+  var p = Math.max(0, +pt || 0);
+  if(!(kcal > 0)) return {p:p, c:0, f:ft === null ? 0 : Math.max(0, +ft || 0)};
+  var room = Math.max(0, kcal - Math.min(kcal, p*4));
+  if(ft === null) return {p:p, c:room*0.55/4, f:room*0.45/9};
+  ft = Math.max(0, +ft || 0);
+  var f = Math.max(ft, FAT_MIN_SHARE * kcal / 9);
+  if((room - f*9)/4 < CARB_MIN_G) f = Math.max(ft*0.8, (room - CARB_MIN_G*4)/9);
+  f = Math.min(f, room/9);
+  return {p:p, c:Math.max(0, (room - f*9)/4), f:f};
+}
+/* The targets behind the bars beside the ring. They used to be drawn against
+   a hardcoded 300 g and 110 g: two invented constants, in the one app whose
+   premise is that every number on screen says where it came from. */
+function macroTargets(kcal, pt, ft){
+  if(pt === undefined) pt = Math.max(0, pnum(S.profile.proteinTarget, 0));
+  if(ft === undefined) ft = fatTargetNow();
+  return macroSplit(kcal, pt, ft);
 }
 /* The protein target a day was priced with. A past day carries its own (x.pt,
    stamped beside its target); a day stamped before that existed falls back to
@@ -722,13 +748,25 @@ function ptFor(d){
   var x = d && d !== today ? peek(d) : null;
   return (x && typeof x.pt === "number") ? x.pt : Math.max(0, pnum(S.profile.proteinTarget, 0));
 }
-function plannedTefRate(kcal, pt){
-  var p = Math.max(0, pt === undefined ? (+S.profile.proteinTarget || 0) : +pt || 0);
+/* The fat target likewise, except that a day frozen before fat targets
+   existed answers null: it was priced with the old split, not with today's
+   fat figure. */
+function ftFor(d){
+  var x = d && d !== today ? peek(d) : null;
+  if(x && typeof x.ft === "number") return x.ft;
+  if(x && typeof x.target === "number") return null;
+  return fatTargetNow();
+}
+/* The rate to assume for food you HAVEN'T logged yet, from the day's own
+   split, so it is your diet's real thermic cost rather than a number typed
+   into a settings screen. Clamped to the range whole-diet measurements
+   actually span, so a silly protein target can't invent free calories. */
+function plannedTefRate(kcal, pt, ft){
+  if(pt === undefined) pt = Math.max(0, +S.profile.proteinTarget || 0);
+  if(ft === undefined) ft = fatTargetNow();
   if(!(kcal > 0)) return 0.12;
-  var pk = Math.min(kcal, p*4);
-  var restK = Math.max(0, kcal - pk);
-  var c = restK*0.55/4, f = restK*0.45/9;
-  var r = tefOf({p:p, c:c, f:f}) / kcal;
+  var m = macroSplit(kcal, pt, ft);
+  var r = tefOf(m) / kcal;
   return Math.max(0.06, Math.min(0.16, r));
 }
 
@@ -1473,13 +1511,14 @@ function stampTarget(d){
     stampTerms(x);
   }
 }
-/* What a target was solved with, beside it: the protein target (which sets
-   the digestion share, so the burn behind the target can be recovered from
-   it) and the measured correction (so the day is itemised with its own). A
+/* What a target was solved with, beside it: the protein and fat targets
+   (which set the digestion share, so the burn behind the target can be
+   recovered from it) and the measured correction (so the day is itemised with its own). A
    device on an older build can drop these when it writes the day; the readers
    then fall back to today's figures, which is all they had before. */
 function stampTerms(x){
   x.pt = Math.max(0, pnum(S.profile.proteinTarget, 0));
+  x.ft = fatTargetNow();
   x.cal = Math.round(calFactor()*10000)/10000;
 }
 /* ---------- re-pricing a past day -----------------------------------------
@@ -1504,10 +1543,10 @@ function rebaseDay(d, before){
   if(x.deficit === undefined) return 0;
   var delta = (rawBase(d) - before) * calFactor();
   if(Math.abs(delta) < 0.5) return 0;
-  var pt  = ptFor(d);
-  var net = Math.max(0, frozenNet(x.target, pt) + delta);
+  var pt  = ptFor(d), ft = ftFor(d);
+  var net = Math.max(0, frozenNet(x.target, pt, ft) + delta);
   var t0  = x.target;
-  x.target = Math.round(net / (1 - plannedTefRate(Math.max(600, net), pt)));
+  x.target = Math.round(net / (1 - plannedTefRate(Math.max(600, net), pt, ft)));
   x.m = Date.now();
   if(x.target === t0) return 0;
   _lastRebase = {d:d, was:t0};
@@ -1522,7 +1561,7 @@ function repriceDay(d){
   var x = S.days[d]; if(!x || d === today) return;
   var t0 = x.target, t1 = Math.round(burn(d).targetLive);
   if(!(t1 > 0) || t1 === t0) { toast("Already priced at today's numbers"); return; }
-  _lastRebase = {d:d, was:t0, terms:{pt:x.pt, cal:x.cal}};
+  _lastRebase = {d:d, was:t0, terms:{pt:x.pt, ft:x.ft, cal:x.cal}};
   x.target = t1; stampTerms(x); x.m = Date.now();
   save(); render();
   toast(wkday(d)+": now "+t1+" ("+(t1-t0>0?"+":"")+(t1-t0)+")");
@@ -1532,7 +1571,7 @@ function undoRebase(){
   var ux = S.days[_lastRebase.d];
   ux.target = _lastRebase.was;
   /* a re-price at today's numbers also re-stamped what it was solved with */
-  if(_lastRebase.terms) ["pt","cal"].forEach(function(k){
+  if(_lastRebase.terms) ["pt","ft","cal"].forEach(function(k){
     if(_lastRebase.terms[k] === undefined) delete ux[k]; else ux[k] = _lastRebase.terms[k];
   });
   ux.m = Date.now();
@@ -1860,20 +1899,21 @@ function zoneName(z){ return {light:"Light", fat:"Fat Burn", cardio:"Cardio", pe
    600 floor, and stays correct if the TEF model is ever changed again. */
 var _fnCache = {};
 function invalidateFrozen(){ _fnCache = {}; }
-function frozenNet(t, pt){
+function frozenNet(t, pt, ft){
   if(!(t > 0)) return 0;
   if(pt === undefined) pt = Math.max(0, pnum(S.profile.proteinTarget, 0));
-  var key = t + "|" + pt;
+  if(ft === undefined) ft = fatTargetNow();
+  var key = t + "|" + pt + "|" + ft;
   if(_fnCache[key] !== undefined) return _fnCache[key];
   var lo = 0, hi = t + 1000, mid;
   for(var i=0;i<40;i++){
     mid = (lo + hi)/2;
-    if(mid / (1 - plannedTefRate(Math.max(600, mid), pt)) < t) lo = mid; else hi = mid;
+    if(mid / (1 - plannedTefRate(Math.max(600, mid), pt, ft)) < t) lo = mid; else hi = mid;
   }
   _fnCache[key] = (lo + hi)/2;
   return _fnCache[key];
 }
-function frozenBase(t, def, pt){ return frozenNet(t, pt) + Math.max(0, +def || 0); }
+function frozenBase(t, def, pt, ft){ return frozenNet(t, pt, ft) + Math.max(0, +def || 0); }
 
 /* One evaluation of the movement model, BEFORE calibration. Only ever used in
    PAIRS across a single edit, so every term the two share cancels: the profile
@@ -1922,9 +1962,9 @@ function burn(d, raw){
                 typeof x.target === "number" && x.target > 0 &&
                 x.deficit !== undefined) ? x.target : null;
   /* a frozen day is recovered, and its digestion share solved, with the
-     protein target it was priced with */
-  var pt = ptFor(d);
-  var base = frozen !== null ? frozenBase(frozen, def, pt) : live;
+     protein and fat targets it was priced with */
+  var pt = ptFor(d), ft = ftFor(d);
+  var base = frozen !== null ? frozenBase(frozen, def, pt, ft) : live;
 
   /* TEF depends on intake and intake depends on TEF, so the target is solved
      rather than iterated:
@@ -1941,7 +1981,7 @@ function burn(d, raw){
      calories still to eat. Every item you log replaces a slice of estimate
      with a slice of measurement, and when the day is full the figure shown is
      your measured TEF to the calorie with nothing left projected. */
-  var r = plannedTefRate(Math.max(600, base - def), pt);
+  var r = plannedTefRate(Math.max(600, base - def), pt, ft);
   /* targetLive is what the CURRENT model would ask for. target is what the day
      actually asked — the same thing for today, and the frozen record for any
      day already gone. Everything that judges adherence must use the latter. */
@@ -2649,7 +2689,7 @@ function paintPane(pane, d, sp, instant){
   var left   = target - e.k;
   var frac   = target>0 ? e.k/target : 0;
   var np     = b.np;
-  var mt     = macroTargets(target, ptFor(d));
+  var mt     = macroTargets(target, ptFor(d), ftFor(d));
 
   if(sp){
     var go = instant ? "set" : "to";
@@ -4734,12 +4774,11 @@ function viewSetup(){
       n1(P.compFactor*100), "setP('compFactor',this.value/100)", "5", "%")+
     numRow("Everything else awake","at your habitual step level \u00b7 1.2 desk-bound, 1.25 school day, 1.4 on your feet",
       P.metIdle, "setP('metIdle',this.value)", "0.05", "MET")+
-    /* TWO step numbers, and the difference confuses people, so label it
-       plainly. The 28-day median is measured and needs no maintenance. This
-       field is a one-off anchor: the step level at which the MET figure above
-       was true. The slope earns its keep from the gap between them, which is
-       exactly why this must NOT auto-track the median — if it did, the gap
-       would always be zero and the slope would never do anything. */
+    /* The 28-day median is measured and needs no maintenance, so it is shown,
+       not asked for. The typed "typical-day anchor" that used to sit under it
+       only mattered through the slope below, which is 0 and recommended 0;
+       with it off, the anchor was a field that changed nothing. It stays in
+       the profile as the fallback for a month with almost no step counts. */
     '<div class="kv" style="display:block">'+
       '<div style="display:flex;justify-content:space-between;gap:12px">'+
         '<span>Measured habitual steps</span>'+
@@ -4749,34 +4788,19 @@ function viewSetup(){
         'nothing to set. Steps above this are the ones credited at '+
         Math.round(Math.max(0.3,Math.min(1,pnum(P.compFactor,1)))*100)+'%.'+
       '</div></div>'+
-    numRow("Typical-day anchor",
-      (function(){
-        var h = Math.round(habitualSteps()), ref = Math.round(+P.stepsRef||0);
-        var t = "the step level the MET figure above was set at. A one-off \u2014 "+
-                "leave it alone once it\u2019s right";
-        /* If these two disagree, neatSlope quietly shifts idle intensity away
-           from the metIdle actually set — so say so out loud, with the size of
-           the effect, rather than leaving it to be discovered. */
-        if(Math.abs(h - ref) >= 500)
-          t += ". <b>Your measured habit is "+h.toLocaleString()+"</b>, so idle is running at "+
-               n2(idleMet(P))+" MET rather than the "+n2(pnum(P.metIdle,1.25))+
-               " above. <a onclick=\'setP(&quot;stepsRef&quot;,"+h+")\' "+
-               "style=\'color:var(--blue);cursor:pointer\'>Use "+h.toLocaleString()+"</a>";
-        return t;
-      })(),
-      P.stepsRef, "setP('stepsRef',this.value)", "250", "")+
-    numRow("A busier life lifts it by",
-      "per 1000 steps of measured habit above the anchor. <b>0 is recommended</b> \u2014 "+
-      "above 0 it re-creates the double-count, because taking up a daily walk is not "+
-      "evidence your other hours got busier"+
-      ((+P.neatSlope||0) > 0
-        ? ". Yours is on, adding about "+
+    /* Only shown while it is on, so it can be switched off: above 0 it
+       re-creates the double-count, and at 0 it has nothing to say. */
+    ((+P.neatSlope||0) !== 0
+      ? numRow("A busier life lifts it by",
+          "per 1000 steps of measured habit above "+Math.round(+P.stepsRef||0).toLocaleString()+
+          ". <b>0 is recommended</b> \u2014 above 0 it re-creates the double-count, because taking "+
+          "up a daily walk is not evidence your other hours got busier. Yours adds about "+
           Math.round(Math.max(0, idleMet(P) - (+P.metIdle||1.25)) * (bmrAt(today)/1440) *
             Math.max(0, (+P.wakingHours||16)*60 - 90)) +
           " kcal/day. <a onclick=\'setP(&quot;neatSlope&quot;,0)\' "+
-          "style=\'color:var(--blue);cursor:pointer\'>Set to 0</a>"
-        : ""),
-      P.neatSlope, "setP('neatSlope',this.value)", "0.002", "MET")+
+          "style=\'color:var(--blue);cursor:pointer\'>Set to 0</a>",
+          P.neatSlope, "setP('neatSlope',this.value)", "0.002", "MET")
+      : "")+
     numRow("Gym session",
       "flat, because your set count is what stays constant \u2014 sessions run long "+
       "when there is company, and that is standing about rather than work. Net of "+
@@ -4815,6 +4839,9 @@ function viewSetup(){
   '<h2 class="t-section" style="margin:26px 0 8px 4px">Targets</h2><div class="card">'+
     numRow("Protein","\u2248"+n1((+P.proteinTarget||0)/Math.max(1,+P.leanMass||1))+
       " g per kg lean mass", P.proteinTarget, "setP('proteinTarget',this.value)", "5", "g")+
+    numRow("Fat","\u2248"+n1(fatTargetNow()/Math.max(1, latestWeight()))+" g per kg \u00b7 fixed like protein; "+
+      "carbs take the rest of the day. Rises only to stay at 20% of a very big day",
+      P.fatTarget, "setP('fatTarget',this.value)", "5", "g")+
     numRow("Goal weight","where the plan ends", P.goalWeight, "setP('goalWeight',this.value)", "0.5", "kg")+
     numRow("Goal body fat","", P.goalBF, "setP('goalBF',this.value)", "0.5", "%")+
     numRow("Lean lost per kilo","share of each kilo down that comes off as lean, not fat. "+
@@ -5377,7 +5404,7 @@ function copyProfile(){
     "Plan: phase "+(band?bandLabel((S.plan.bands||[]).indexOf(band)):"—")+
       " on a "+Math.round(b.deficit)+
     " kcal/day deficit, so about "+n1(tr.mid)+" kg/week. Ending at "+
-    n1(P.goalWeight)+" kg (~"+P.goalBF+"% body fat). Protein target "+P.proteinTarget+" g.\n"+
+    n1(P.goalWeight)+" kg (~"+P.goalBF+"% body fat). Protein target "+P.proteinTarget+" g, fat "+fatTargetNow()+" g, carbs the rest.\n"+
     "Today's numbers: burn "+Math.round(b.total)+" kcal, so eat "+Math.round(b.target)+".\n"+
     "My burn model: BMR "+Math.round(b.bmr)+" ("+bmrBasis(today)+") + idle NEAT "+
     Math.round(b.neat)+" at "+n1(b.np.met)+" MET + walking at "+
