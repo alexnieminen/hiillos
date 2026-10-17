@@ -2682,6 +2682,18 @@ var RING_C = 2*Math.PI*((104-11)/2);
    and one copy was always subtly wrong. `sp` present means animate through
    the springs; absent means write the values straight in, which is what a
    pane arriving into view needs. */
+/* What the ring says. It used to turn red the moment you passed the target,
+   so 50 kcal past a 600-deficit day read as a failure, when the target
+   already has the deficit taken off and you were still losing, just by a
+   little less. Past the target it now counts what is left of the day's
+   deficit, in amber; red is kept for eating past the burn itself, the one
+   thing that is actually a surplus. On a maintenance day the target IS the
+   burn, so past it is red straight away, which is right. */
+function ringState(target, eaten, burnTotal){
+  if(eaten <= target) return {zone:"left", num:target - eaten, label:"left", stroke:"var(--blue)"};
+  if(eaten <= burnTotal) return {zone:"deficit", num:burnTotal - eaten, label:"in deficit", stroke:"var(--warn)"};
+  return {zone:"over", num:eaten - burnTotal, label:"over burn", stroke:"var(--red)"};
+}
 function paintPane(pane, d, sp, instant){
   if(!pane) return;
   var P=S.profile, b=burn(d), e=b.eaten;
@@ -2690,30 +2702,29 @@ function paintPane(pane, d, sp, instant){
   var frac   = target>0 ? e.k/target : 0;
   var np     = b.np;
   var mt     = macroTargets(target, ptFor(d), ftFor(d));
+  var rs     = ringState(target, e.k, b.total);
+  var ringEl = pane.querySelector(".js-ring");
+  if(ringEl) ringEl.setAttribute("stroke", rs.stroke);
 
   if(sp){
     var go = instant ? "set" : "to";
     sp.ring[go](frac);
-    sp.num[go](Math.abs(left));
+    sp.num[go](rs.num);
     sp.p[go](mt.p ? e.p/mt.p : 0);
     sp.c[go](mt.c ? Math.min(1, e.c/mt.c) : 0);
     sp.f[go](mt.f ? Math.min(1, e.f/mt.f) : 0);
     sp.k[go](frac);
   } else {
-    var ring = pane.querySelector(".js-ring");
-    if(ring){
-      ring.setAttribute("stroke-dashoffset", RING_C*(1-Math.max(0,Math.min(1,frac))));
-      ring.setAttribute("stroke", frac > 1 ? "var(--red)" : "var(--blue)");
-    }
-    setRingNum(pane, Math.round(Math.abs(left)));
+    if(ringEl) ringEl.setAttribute("stroke-dashoffset", RING_C*(1-Math.max(0,Math.min(1,frac))));
+    setRingNum(pane, Math.round(rs.num));
     setBar(pane,"p", mt.p ? e.p/mt.p : 0, null);
     setBar(pane,"c", mt.c ? Math.min(1, e.c/mt.c) : 0, null);
     setBar(pane,"f", mt.f ? Math.min(1, e.f/mt.f) : 0, null);
     setBar(pane,"k", frac, null);
   }
 
-  setText(pane, ".js-ringlbl", left >= 0 ? "left" : "over");
-  if(sp) setRingNum(pane, Math.round(Math.abs(left)));
+  setText(pane, ".js-ringlbl", rs.label);
+  if(sp) setRingNum(pane, Math.round(rs.num));
   /* All three now read "eaten / target", because all three bars now HAVE a
      target. Carbs and fat used to show a bare gram count beside a bar that was
      quietly measured against 300 g and 110 g. */
@@ -2802,6 +2813,9 @@ function paintPane(pane, d, sp, instant){
   if(bl) bl.innerHTML = 'Burn '+Math.round(b.total)+' \u2212 deficit '+
     Math.round(b.deficit)+' = eat <b>'+Math.round(target)+'</b> kcal'+
     (target<1500?' <span class="pill o">low day</span>':'')+
+    (rs.zone === "deficit"
+      ? '<div style="margin-top:4px">'+Math.round(e.k - target)+' past today’s target, still '+
+        Math.round(rs.num)+' under your burn: a smaller deficit, not a surplus.</div>' : '')+
     '<div class="t-cap" style="color:var(--label3);margin-top:3px">'+deficitWhy(d)+
       (partialDay(d) ? ' Not fully logged: left out of measured burn and adherence.' : '')+'</div>';
 
@@ -3276,9 +3290,10 @@ function initTodaySprings(){
   var num  = pane.querySelector(".js-ringnum");
   if(!ring || !num){ todaySprings = null; return; }
   todaySprings = {
+    /* length only: the colour is the day's state, set once by paintPane, not
+       something that should flicker as the arc passes the top */
     ring: new Spring(0, {damping:1.0, response:0.45, onUpdate:function(v){
       ring.setAttribute("stroke-dashoffset", RING_C * (1 - Math.max(0, Math.min(1, v))));
-      ring.setAttribute("stroke", v > 1 ? "var(--red)" : "var(--blue)");
     }}),
     num: new Spring(0, {damping:1.0, response:0.5, onUpdate:function(v){
       /* Resize on every frame, not just at paint: the figure counts up
