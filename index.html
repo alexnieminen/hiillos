@@ -2074,11 +2074,24 @@ function computeCalibration(){
 
      Whole weeks because bodyweight has a real weekly rhythm (up at the
      weekend, down midweek), so a 30-day window carries a weekday-composition
-     bias that a 28-day one does not. */
-  var CAL_MAX_SPAN = 42, CAL_MIN_SPAN = 14;
-  var span = Math.min(CAL_MAX_SPAN, dayDiff(last, arr[0].d));
+     bias that a 28-day one does not.
+
+     SIX WEEKS OF DIETING, not six calendar weeks. Off days carry no
+     information here, so a week away shrank the sample by a week and pushed
+     the window's start into whatever came before it. After a cottage-and-
+     London week on 27 Oct 2026 it opened inside the September exam week, its
+     first dry mornings were the post-exam ones, and the reading jumped from
+     +85 to +190. So the window grows a week at a time until it holds
+     CAL_DIET_DAYS of dieting (a clean six weeks held 31), up to
+     CAL_STRETCH_SPAN; that reached back to the pre-exam mornings and read
+     +119. With no breaks it never grows. */
+  var CAL_MAX_SPAN = 42, CAL_MIN_SPAN = 14, CAL_DIET_DAYS = 30, CAL_STRETCH_SPAN = 63;
+  var avail = dayDiff(last, arr[0].d);
+  var span = Math.min(CAL_MAX_SPAN, avail);
   if(span < CAL_MIN_SPAN) return false;
   span -= span % 7;                        // still at least CAL_MIN_SPAN
+  while(dietDaysBetween(shift(last, -span), last) < CAL_DIET_DAYS &&
+        span + 7 <= Math.min(CAL_STRETCH_SPAN, avail)) span += 7;
   var from = shift(last, -span);
 
   /* Intake over [from, last), the same half-open range dietDaysBetween
@@ -2095,11 +2108,16 @@ function computeCalibration(){
        plannedPerDay > 0) while still computing and applying a factor. A day
        marked not fully logged is out for a plainer reason: its intake is a
        floor, and averaging it in makes you look like you burn less. */
-    if(x && x.entries && x.entries.length && !offDay(k)) logged.push(k);
+    if(!calOffDay(k)) logged.push(k);
     k = shift(k, 1);
   }
-  // needs most of the window actually logged, or the average intake is fiction
-  if(logged.length < 10 || logged.length < span * 0.6) return false;
+  /* This also demanded 60% of the CALENDAR window logged. But an off day can
+     never count as logged, so every maintenance day counted against you
+     twice, and a week away on top of the exam week, a weekend and a trip
+     left 24 of 42 days and no reading at all. A thin window is already priced
+     where it belongs: fewer diet days means a wider SE below and a smaller
+     share of the reading used. */
+  if(logged.length < 10) return false;
 
   var intake = 0, modeled = 0;
   /* .actual, not .total: comparing measured intake against a projected-TEF
@@ -2125,11 +2143,11 @@ function computeCalibration(){
        night out is the honest guess. Sharing it over calendar days spread a
        fortnight's loss over three weeks whenever a week of maintenance sat
        inside it, and under-read your burn by about 250 kcal a day. Days with
-       nothing logged at all stay in, as ordinary days at the average intake.
+       nothing logged at all are off days too (see calOffDay).
      - Mornings the scale is still carrying a pause's water are left out (see
        waterMorning). They are about glycogen, not fat. */
   var tOf = {}, t = 0;
-  for(k = from; k <= last; k = shift(k, 1)){ tOf[k] = t; if(!offDay(k)) t++; }
+  for(k = from; k <= last; k = shift(k, 1)){ tOf[k] = t; if(!calOffDay(k)) t++; }
   var pts = [], wet = 0;
   arr.forEach(function(q){
     if(q.d < from) return;
@@ -2217,8 +2235,22 @@ function computeCalibration(){
    mornings after any day off the diet are left out of the line. */
 var WATER_MORNINGS = 3;
 function waterMorning(d){
-  for(var i = 1; i <= WATER_MORNINGS; i++) if(offDay(shift(d, -i))) return true;
+  for(var i = 1; i <= WATER_MORNINGS; i++) if(calOffDay(shift(d, -i))) return true;
   return false;
+}
+/* A day measured burn takes as breaking even: maintenance, not fully logged,
+   or nothing logged at all. That last one used to count as a diet day eaten
+   at the average intake, which is right for a forgotten Tuesday and wrong for
+   what an untracked stretch usually is: a cottage weekend or a trip, eaten at
+   maintenance on purpose and weighed on whatever scale was there. Counted as
+   dieting, those days shared out the loss too thinly, their mornings landed
+   in the line as if dry, and the trip water in the window's second half made
+   it look front-loaded, so the card gave up. Today is never one: it is still
+   being logged. */
+function calOffDay(d){
+  if(offDay(d)) return true;
+  var x = peek(d);
+  return d < today && !(x && x.entries && x.entries.length);
 }
 /* Least-squares slope of w against t. */
 function fitSlope(pts){
@@ -2228,10 +2260,10 @@ function fitSlope(pts){
   pts.forEach(function(p){ sxx += (p.t-mt)*(p.t-mt); sxy += (p.t-mt)*(p.w-mw); });
   return sxx > 0 ? sxy/sxx : 0;
 }
-/* Days in [a, b) that count as dieting. */
+/* Days in [a, b) that count as dieting, for measured burn. */
 function dietDaysBetween(a, b){
   var n = 0;
-  for(var k = a; k < b; k = shift(k, 1)) if(!offDay(k)) n++;
+  for(var k = a; k < b; k = shift(k, 1)) if(!calOffDay(k)) n++;
   return Math.max(1, n);
 }
 function calFactor(){
@@ -3926,7 +3958,7 @@ function calibrationSection(){
         (c.wet ? c.wet+' morning'+(c.wet===1?'':'s')+' within '+WATER_MORNINGS+' days of a day off the '+
           'diet '+(c.wet===1?'is':'are')+' left out of that line, while the scale was still carrying '+
           'the water. ' : '')+
-        (c.off ? c.off+' maintenance or not-fully-logged day'+(c.off===1?' is':'s are')+
+        (c.off ? c.off+' maintenance, untracked or not-fully-logged day'+(c.off===1?' is':'s are')+
           ' left out and taken as breaking even, so the loss is shared over the '+c.dietDays+
           ' days you were actually dieting. ' : '')+
         '<br><br>'+(Math.abs(off) < 4 ? 'That’s close enough that the model is doing its job'+
