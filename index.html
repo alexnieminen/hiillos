@@ -2056,61 +2056,38 @@ function calibration(){
 function computeCalibration(){
   var arr = sortedWeights();
   if(arr.length < 6) return false;
-  var ma = movingAvg(arr, 7);
-  var last = ma[ma.length-1], first = null;
-  /* Both ends must sit on a settled average. The first point of the series
-     has n=1 — a single raw morning weight — so anchoring to it was measuring
-     one day's water balance and calling it a fortnight of progress. */
-  if(last.n < 4) return false;
-  /* WINDOW LENGTH. This loop had no `break`, so `first` was overwritten on
-     every qualifying point and the LAST one won — it selected the SHORTEST
-     legal window, ~14 days, and threw the rest of the history away. That is
-     backwards, and expensively so: the estimate is dominated by scale noise at
-     both ends, and its standard error falls roughly as 4400/(span — 7) kcal/day
-     — about ±630 at 14 days, ±315 at 21, ±210 at 28. A fortnight is not a weak
-     signal, it is noise: ±630 is wider than the entire 800 deficit it is trying
-     to measure.
+  var last = arr[arr.length-1].d;
+  /* WINDOW LENGTH. The longest the history allows, capped at CAL_MAX_SPAN and
+     snapped to whole weeks. Scale noise and water dominate this estimate and
+     both fade with length. The first version had no `break` in its search and
+     so picked the SHORTEST legal window, ~14 days, which is noise rather than
+     signal; then the cap was four weeks, and on real data that still walked
+     from +7 to +137 kcal/day over the week to 17 Oct 2026 as the window's
+     start slid off an exam week. Six weeks and the fitted line below held
+     between +55 and +99 over the same fortnight.
 
-     So take the LONGEST window available instead, capped at CAL_MAX_SPAN. Two
-     reasons for the cap rather than "all of it". First, `modeled` reconstructs
-     each day with TODAY'S settings (only the habitual-step median is the day's
-     own), so beyond about four weeks it is pricing days with a baseline that
-     never applied to them. Second, a window mean estimates your burn at the window's
-     MIDPOINT, and you are lighter now than you were then — the longer the
-     window, the staler the answer.
+     Why a cap rather than "all of it": `modeled` reconstructs each day with
+     TODAY'S settings (only the habitual-step median is the day's own), so the
+     further back the window reaches, the more it prices days with a baseline
+     that never applied to them. And a window estimates your burn at its
+     MIDPOINT, which goes staler the longer it gets.
 
-     Snapped to whole weeks because bodyweight has a real weekly rhythm (up at
-     the weekend, down midweek), so a 30-day window carries a weekday-
-     composition bias that a 28-day one does not. */
-  var CAL_MAX_SPAN = 28, CAL_MIN_SPAN = 14;
-  for(var i=0;i<ma.length;i++){
-    var gap = dayDiff(last.d, ma[i].d);
-    if(ma[i].n >= 4 && gap >= CAL_MIN_SPAN && gap <= CAL_MAX_SPAN){ first = ma[i]; break; }
-  }
-  /* Nothing inside the cap: fall back to the shortest window past the minimum,
-     which is the old behaviour and still better than refusing to answer. */
-  if(!first)
-    for(var j=0;j<ma.length;j++)
-      if(ma[j].n >= 4 && dayDiff(last.d, ma[j].d) >= CAL_MIN_SPAN) first = ma[j];
-  if(!first) return false;
-  var span = dayDiff(last.d, first.d);
-  /* Snap to a whole number of weeks by walking `first` forward, never back
-     past the minimum. */
-  if(span > CAL_MIN_SPAN && span % 7){
-    var want = Math.max(CAL_MIN_SPAN, span - (span % 7));
-    for(var w=0;w<ma.length;w++)
-      if(ma[w].n >= 4 && dayDiff(last.d, ma[w].d) >= want &&
-         dayDiff(last.d, ma[w].d) < span){ first = ma[w]; break; }
-    span = dayDiff(last.d, first.d);
-  }
+     Whole weeks because bodyweight has a real weekly rhythm (up at the
+     weekend, down midweek), so a 30-day window carries a weekday-composition
+     bias that a 28-day one does not. */
+  var CAL_MAX_SPAN = 42, CAL_MIN_SPAN = 14;
+  var span = Math.min(CAL_MAX_SPAN, dayDiff(last, arr[0].d));
+  if(span < CAL_MIN_SPAN) return false;
+  span -= span % 7;                        // still at least CAL_MIN_SPAN
+  var from = shift(last, -span);
 
-  /* Intake over [first, last), the same half-open range dietDaysBetween
+  /* Intake over [from, last), the same half-open range dietDaysBetween
      counts. The last morning's weight was taken before that day's food, so the
      food can't be in it, and when the last weigh-in is this morning, today's
      half-logged day counted as a whole one: measured burn moved with every
      meal logged, and so did the target whenever the correction was on. */
-  var logged = [], k = first.d;
-  while(k < last.d){
+  var logged = [], k = from;
+  while(k < last){
     var x = S.days[k];
     /* A deliberate maintenance stretch is where this estimator is least able
        to tell fat from water, and a window made entirely of zero-deficit days
@@ -2131,15 +2108,38 @@ function computeCalibration(){
   intake /= logged.length; modeled /= logged.length;
   if(modeled <= 0) return false;
 
-  /* Per DIET day. The intake above leaves the off days out, so the weight
-     change has to be shared over the days that are left too — dividing it by
-     the calendar span spread a fortnight's loss over three weeks whenever a
-     week of maintenance sat inside it, and under-read your burn by about 250
-     kcal a day. Off days are taken as breaking even: for a pause that is the
-     plan, and for a night out it is the honest guess. Days with nothing
-     logged at all stay in, as ordinary days at the average intake. */
-  var dietDays = dietDaysBetween(first.d, last.d);
-  var kgPerDay = (first.avg - last.avg) / dietDays;
+  /* THE WEIGHT CHANGE. This was the difference between the 7-day averages at
+     the two ends of the window, which hung the whole answer on fourteen
+     mornings, and the ends are exactly where pauses land. Open a window
+     inside an exam week and it starts on a kilo of glycogen water, so the
+     loss reads a kilo too big; close one the morning after a weekend away and
+     it reads a kilo too small. Over 23 diet days a kilo is worth about 360
+     kcal a day.
+
+     So it is a straight line through every morning in the window instead,
+     with two rules:
+
+     - The clock runs on DIET days. The intake above leaves the off days out,
+       so the loss has to be shared over the days that are left too; off days
+       are taken as breaking even, which for a pause is the plan and for a
+       night out is the honest guess. Sharing it over calendar days spread a
+       fortnight's loss over three weeks whenever a week of maintenance sat
+       inside it, and under-read your burn by about 250 kcal a day. Days with
+       nothing logged at all stay in, as ordinary days at the average intake.
+     - Mornings the scale is still carrying a pause's water are left out (see
+       waterMorning). They are about glycogen, not fat. */
+  var tOf = {}, t = 0;
+  for(k = from; k <= last; k = shift(k, 1)){ tOf[k] = t; if(!offDay(k)) t++; }
+  var pts = [], wet = 0;
+  arr.forEach(function(q){
+    if(q.d < from) return;
+    if(waterMorning(q.d)){ wet++; return; }
+    pts.push({t:tOf[q.d], w:+q.w});
+  });
+  // enough mornings, spread across the window, or the line is a guess
+  if(pts.length < 8 || pts[pts.length-1].t - pts[0].t < 10) return false;
+  var dietDays = dietDaysBetween(from, last);
+  var kgPerDay = -fitSlope(pts);           // per diet day; positive is a loss
   var trueTDEE = intake + kgPerDay * kcalPerKg();
   var factor = trueTDEE / modeled;
 
@@ -2166,21 +2166,16 @@ function computeCalibration(){
      What separates them is the SHAPE. Glycogen and its water leave once and
      do not come back, so a transient shows up as loss that is front-loaded
      and then decelerates. A model that is simply wrong produces the same
-     excess rate in both halves of the window. So compare the halves. */
-  var midDate = shift(first.d, Math.round(span/2)), mid = null;
-  for(var mi=0; mi<ma.length; mi++)
-    if(ma[mi].n >= 4 && ma[mi].d <= midDate) mid = ma[mi];
-
-  var frontLoaded = false, r1 = null, r2 = null;
-  if(mid && mid.d > first.d && mid.d < last.d){
-    var d1 = dietDaysBetween(first.d, mid.d), d2 = dietDaysBetween(mid.d, last.d);
-    if(d1 >= 4 && d2 >= 4){
-      r1 = (first.avg - mid.avg) / d1;      // kg/day over the first half
-      r2 = (mid.avg  - last.avg) / d2;      // kg/day over the second half
-      /* decelerating sharply, and the early half beyond what calories allow */
-      frontLoaded = r1 > Math.max(r2 * 1.5, r2 + 0.02) &&
-                    plannedPerDay > 0 && r1 > plannedPerDay * 1.25;
-    }
+     excess rate in both halves of the window. So fit each half on its own and
+     compare them. */
+  var frontLoaded = false, r1 = null, r2 = null, h1 = [], h2 = [];
+  pts.forEach(function(p){ (p.t < dietDays/2 ? h1 : h2).push(p); });
+  if(h1.length >= 4 && h2.length >= 4){
+    r1 = -fitSlope(h1);                    // kg/day over the first half
+    r2 = -fitSlope(h2);                    // kg/day over the second half
+    /* decelerating sharply, and the early half beyond what calories allow */
+    frontLoaded = r1 > Math.max(r2 * 1.5, r2 + 0.02) &&
+                  plannedPerDay > 0 && r1 > plannedPerDay * 1.25;
   }
   var suspect = plannedPerDay > 0 &&
                 (frontLoaded || ratio > 2.0 || ratio < -0.5);
@@ -2188,29 +2183,50 @@ function computeCalibration(){
   /* SHRINKAGE. The raw factor is a ratio of two noisy numbers, and applying it
      whole means a fortnight of water decides what you eat for the next month.
      So weight it by how much it actually knows: with a sampling error of about
-     SE = 4400/(span — 7) kcal/day and a prior spread of about TAU on the model
+     SE = 4400/(days — 7) kcal/day and a prior spread of about TAU on the model
      itself (Mifflin lands within 10% on maybe three adults in four, and the
      activity guess is looser still),
 
-         lambda = TAU\u00b2 / (TAU\u00b2 + SE\u00b2),    applied = 1 + lambda·(factor — 1)
+         lambda = TAU² / (TAU² + SE²),    applied = 1 + lambda·(factor — 1)
 
      which is the ordinary shrinkage weight. At 14 days lambda is about 0.15,
-     so a wild reading barely moves your targets; at 28 days it is about 0.6;
-     given a long clean run it approaches 1. The estimate degrades gracefully
-     instead of lurching, and a longer window is now worth something concrete
-     rather than just feeling better. */
+     so a wild reading barely moves your targets; at six weeks with a pause in
+     them it is about 0.65; given a long clean run it approaches 1. The SE was
+     sized for the two 7-day averages this used to subtract. A line through
+     every dry morning knows at least that much, so the weight it earns here
+     errs low, which is the side to err on. */
   var SE = 4400 * kcalPerKg() / 7700 / Math.max(1, dietDays - 7), TAU = 260;
   var lambda = (TAU*TAU) / (TAU*TAU + SE*SE);
   var shrunk = 1 + lambda * (factor - 1);
+  var clamped = Math.max(0.85, Math.min(1.15, shrunk));
 
   return { intake:intake, modeled:modeled, trueTDEE:trueTDEE, factor:factor,
-           shrunk:shrunk, lambda:lambda, se:SE,
-           clamped: Math.max(0.85, Math.min(1.15, shrunk)),
+           shrunk:shrunk, lambda:lambda, se:SE, clamped:clamped,
+           extra:modeled * (clamped - 1),  // kcal/day beyond the model, as applied
            days:logged.length, span:span, dietDays:dietDays, off:span - dietDays,
-           coverage: logged.length/span,
+           coverage: logged.length/span, mornings:pts.length, wet:wet,
            kgPerDay:kgPerDay, plannedPerDay:plannedPerDay, ratio:ratio,
            suspect:suspect, frontLoaded:frontLoaded, r1:r1, r2:r2,
-           from:first.d, to:last.d };
+           from:from, to:last };
+}
+/* A morning the scale is still carrying a pause. Coming off a deficit refills
+   muscle glycogen, and the water bound to it puts 0.5 to 1.5 kg on within a
+   day or two; it drains again over the first mornings back on the diet. In
+   this app's own history the scale was back on its line by the second or
+   third morning, after an exam week and after a weekend away alike, so three
+   mornings after any day off the diet are left out of the line. */
+var WATER_MORNINGS = 3;
+function waterMorning(d){
+  for(var i = 1; i <= WATER_MORNINGS; i++) if(offDay(shift(d, -i))) return true;
+  return false;
+}
+/* Least-squares slope of w against t. */
+function fitSlope(pts){
+  var n = pts.length, mt = 0, mw = 0, sxx = 0, sxy = 0;
+  pts.forEach(function(p){ mt += p.t; mw += p.w; });
+  mt /= n; mw /= n;
+  pts.forEach(function(p){ sxx += (p.t-mt)*(p.t-mt); sxy += (p.t-mt)*(p.w-mw); });
+  return sxx > 0 ? sxy/sxx : 0;
 }
 /* Days in [a, b) that count as dieting. */
 function dietDaysBetween(a, b){
@@ -2227,6 +2243,19 @@ function calFactor(){
      precisely the failure the flag exists to prevent. A window this page
      refuses to report is a window it must not apply either. */
   return (c && !c.suspect) ? c.clamped : 1;
+}
+/* What the scale says the model leaves out, in kcal a day, for the FORECAST.
+   With the correction off your targets are still the model's, so every diet
+   day runs this much more deficit than the plan says, and a forecast that
+   ignores it lands late: about 85 a day in October 2026 put 84 kg a week
+   later on the plan card than the scale was heading. With the correction on,
+   the targets already hold it: you eat it, and the deficit is the plan's.
+   Like calFactor, a window this page won't apply is one it won't forecast
+   with either. */
+function measuredExtra(){
+  if(S.profile.calibrate) return 0;
+  var c = calibration();
+  return (c && !c.suspect) ? c.extra : 0;
 }
 function eaten(d){
   var x=peek(d), t={k:0,p:0,c:0,f:0};
@@ -3868,16 +3897,23 @@ function calibrationSection(){
           '<br><br>Nothing is wrong with your logging. It clears itself: once the whole '+
           c.span+'-day window sits after the drop, around <b>'+
           new Date(clean+"T12:00").toLocaleDateString(undefined,{day:"numeric",month:"long"})+
-          '</b>, this page starts telling you something real.'+
+          '</b>, this page starts telling you something real. Until then the plan’s '+
+          'forecast runs at the pace its deficits say.'+
         '</div>'+
         (on ? '<div style="margin-top:11px"><button class="btn danger ctl" data-press '+
               'onclick="toggleCal()">Turn the correction off \u2014 it is using this window</button></div>' : '')+
       '</div></div>';
   }
+  /* The difference in kcal, as it is actually used: in the forecast while the
+     correction is off, in your targets while it is on. Never in both, or the
+     forecast would count food you were already told to eat. */
+  var ex = Math.round(c.extra/5)*5, exAbs = Math.abs(ex);
   return h +
     '<div class="kv"><span>You actually burn</span><span>'+Math.round(c.trueTDEE)+' kcal/day</span></div>'+
     '<div class="kv"><span>The model says</span><span>'+Math.round(c.modeled)+' kcal/day</span></div>'+
     '<div class="kv"><span>Average intake</span><span>'+Math.round(c.intake)+' kcal/day</span></div>'+
+    '<div class="kv"><span>'+(on ? 'In your targets' : 'Counted in the forecast')+'</span><span>'+
+      (ex < 0 ? '−' : '+')+exAbs+' kcal/day</span></div>'+
     '<div style="padding:12px 16px;border-top:.5px solid var(--sep)">'+
       '<div style="margin-bottom:7px">'+pill+'</div>'+
       '<div class="t-sub" style="color:var(--label2);line-height:1.5">'+
@@ -3885,30 +3921,40 @@ function calibrationSection(){
            what c.days counts. Reporting the interval made "29 logged days
            across 28 days" read like an arithmetic slip. */
         'Worked back from '+c.days+' logged days across '+(c.span+1)+' days of weigh-ins: what you ate, '+
-        'plus the energy in the weight that came off. '+
+        'plus the energy in the weight that came off, read from a straight line through '+
+        c.mornings+' mornings. '+
+        (c.wet ? c.wet+' morning'+(c.wet===1?'':'s')+' within '+WATER_MORNINGS+' days of a day off the '+
+          'diet '+(c.wet===1?'is':'are')+' left out of that line, while the scale was still carrying '+
+          'the water. ' : '')+
         (c.off ? c.off+' maintenance or not-fully-logged day'+(c.off===1?' is':'s are')+
           ' left out and taken as breaking even, so the loss is shared over the '+c.dietDays+
           ' days you were actually dieting. ' : '')+
-        (Math.abs(off) < 4
-          ? 'That\'s close enough that the model is doing its job — no correction needed.'
-          : 'Turning the correction on multiplies your burn by ×'+n2(c.clamped)+
-            ', so your daily target follows what your body actually does instead of the formulas.')+
-        '<br><br>Over '+c.span+' days the scale noise alone is worth about \u00b1'+
+        '<br><br>'+(Math.abs(off) < 4 ? 'That’s close enough that the model is doing its job'+
+          (on || exAbs < 10 ? '. ' : ', but '+exAbs+' a day still adds up over a phase. ') : '')+
+        (on
+          ? 'It is in your targets (×'+n2(c.clamped)+'), so you eat it: the deficit is the one '+
+            'the plan says, and the forecast runs at the plan’s own pace.'
+          : exAbs < 10 ? 'The difference is too small to move the forecast.'
+          : 'Your targets still come from the model, so each diet day runs about '+exAbs+' '+
+            (ex > 0 ? 'deeper' : 'shallower')+' than the plan says, and <b>the plan’s forecast '+
+            'counts it</b>. Or put it in your targets instead: they '+(ex > 0 ? 'go up' : 'come down')+
+            ' by about '+exAbs+', and the plan runs at its own pace.')+
+        '<br><br>Over '+c.span+' days the scale noise alone is worth about ±'+
         Math.round(c.se)+' kcal/day, so this reading is only worth so much on its own. '+
         'It is blended with the model at '+Math.round(c.lambda*100)+'%'+
-        (c.span < 28 ? ' \u2014 the weight it earns at this window length, and it rises '+
+        (c.span < 42 ? ' — the weight it earns at this window length, and it rises '+
           'as your history gets longer' : '')+
         ': the raw arithmetic says '+(raw>0?'+':'')+Math.round(raw)+'%, and '+
-        (off>0?'+':'')+Math.round(off)+'% is what actually gets applied.'+
+        (off>0?'+':'')+Math.round(off)+'% is what actually gets used.'+
       '</div>'+
       '<div style="margin-top:11px"><button class="btn '+(on?'danger':'sec')+' ctl" data-press '+
-        'onclick="toggleCal()">'+(on?'Turn the correction off':'Apply this correction')+'</button></div>'+
+        'onclick="toggleCal()">'+(on?'Take it out of my targets':'Put it in my targets')+'</button></div>'+
     '</div></div>';
 }
 function toggleCal(){
   S.profile.calibrate = S.profile.calibrate ? 0 : 1;
   S.pm = Date.now(); save(); render();
-  toast(S.profile.calibrate ? "Using your measured burn" : "Back to the model");
+  toast(S.profile.calibrate ? "Measured burn is in your targets" : "Targets back on the model");
 }
 
 /* Waist read against the scale. This is the pairing that actually tells you
@@ -4094,18 +4140,21 @@ function pauseDaysBetween(a, b){
 }
 /* Roll the plan forward phase by phase from where you actually are. Each
    band's rate is the one its own deficit implies, so the forecast IS the
-   plan rather than a straight line drawn through it. */
+   plan rather than a straight line drawn through it. The deficit it runs on
+   is the one you will actually be in: the band's, plus whatever the scale
+   says the model misses (measuredExtra). A band set to zero stays at zero. */
 function planForecast(){
   if(goalMaint(today)) return [];          // there is nothing left to forecast
   var goal = +S.profile.goalWeight || 84;
-  var w = trendWeightAt(today), d = today, out = [], guard = 0;
+  var w = trendWeightAt(today), d = today, out = [], guard = 0, extra = measuredExtra();
   while(w > goal + 0.05 && guard++ < 12){
     var band = planBandFor(w);
     if(!band) break;
     var floor = Math.max(goal, +band.above || 0);
     var drop = w - floor;
     if(drop <= 0.05){ w = floor; continue; }
-    var rate = (+band.deficit || 0) * 7 / kcalPerKg();
+    var real = (+band.deficit || 0) > 0 ? +band.deficit + extra : 0;
+    var rate = real * 7 / kcalPerKg();
     if(rate <= 0.01) break;
     var days = Math.round(drop / rate * 7);
     /* Adding the pause pushes the phase's end out, and the days it moves into
@@ -4121,7 +4170,7 @@ function planForecast(){
     }
     var end = shift(d, days + pause);
     out.push({label:bandLabel((S.plan.bands||[]).indexOf(band)), deficit:+band.deficit,
-              rate:rate, from:w, to:floor, weeks:drop/rate, pause:pause, start:d, end:end});
+              real:real, rate:rate, from:w, to:floor, weeks:drop/rate, pause:pause, start:d, end:end});
     w = floor; d = end;
   }
   return out;
@@ -4151,8 +4200,9 @@ function etaText(){
    each one lands — recomputed from your real trend weight every time you
    open it, so it's a forecast rather than a screenshot of a table. */
 function planSection(){
-  var f = planForecast(), tw = trendWeightAt(today);
+  var f = planForecast(), tw = trendWeightAt(today), ex = measuredExtra();
   var cur_b = planBandFor(tw), win = planWindowFor(today), gm = !win && goalMaint(today);
+  var exKcal = Math.abs(Math.round(ex/5)*5), exShown = exKcal >= 10;
   var h = '<div class="sectionhead"><h2 class="t-section">The plan</h2>'+
           '<a data-press onclick="nav(\'setup\')">edit</a></div><div class="card">';
 
@@ -4178,13 +4228,23 @@ function planSection(){
       '. Eating at maintenance through a hard week is a deliberate part of the plan, '+
       'not a lapse \u2014 nothing here counts it as one.</div></div>';
   } else if(cur_b){
-    var cc = ceilingCheck(tw, +cur_b.deficit);
+    /* The deficit you are really in: the band's, plus what the scale says the
+       model misses. The muscle-loss ceiling is checked against THAT, because
+       checking the band alone would call a 690 day a 600 one, and the ceiling
+       is the one number here that must not be flattered. */
+    var real = +cur_b.deficit > 0 ? +cur_b.deficit + ex : 0;
+    var cc = ceilingCheck(tw, real);
     h += '<div style="padding:14px 16px">'+
       '<div class="t-head" style="margin-bottom:4px">Phase '+
       esc(bandLabel((S.plan.bands||[]).indexOf(cur_b)))+'</div>'+
       '<div class="t-sub" style="color:var(--label2);line-height:1.5">'+
-      'Deficit <b>'+Math.round(cur_b.deficit)+'</b> \u2192 about <b>'+n1(cur_b.deficit*7/kcalPerKg())+
-      ' kg/week</b>, '+pct1(cur_b.deficit*7/kcalPerKg()/tw*100)+' of body weight. Trend weight '+nw(tw)+' kg'+
+      'Deficit <b>'+Math.round(cur_b.deficit)+'</b>'+
+      (exShown && real > 0
+        ? ', really about <b>'+Math.round(real/10)*10+'</b> because you burn about '+exKcal+
+          (ex > 0 ? ' more' : ' less')+' than the model says, so'
+        : ' \u2192')+
+      ' about <b>'+n1(real*7/kcalPerKg())+
+      ' kg/week</b>, '+pct1(real*7/kcalPerKg()/tw*100)+' of body weight. Trend weight '+nw(tw)+' kg'+
       (function(){
         var st = weighStaleness(today);
         if(st >= 999) return ' \u2014 but there is no weigh-in at all yet, so this is a '+
@@ -4231,6 +4291,11 @@ function planSection(){
     });
     h += '<div class="kv tot"><span>At '+n1(+S.profile.goalWeight||84)+' kg</span><span>'+
       fmtShort(f[f.length-1].end)+'</span></div>';
+    if(exShown) h += '<div class="note" style="border-top:.5px solid var(--sep)">'+
+      'The kg/wk column counts the ~'+exKcal+' kcal a day you burn '+(ex > 0 ? 'beyond' : 'short of')+
+      ' the model (Measured burn, below), so each deficit runs about that much '+
+      (ex > 0 ? 'deeper' : 'shallower')+' than the number beside it. Put it in your targets '+
+      'there and you eat it instead, and the dates go back to the plan’s own pace.</div>';
   }
   return h + '</div>';
 }
